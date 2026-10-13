@@ -25,6 +25,13 @@ number defaults were excluded. The source runs in a fresh environment without
 Supabase installed. Publication guard, lint, inherited UI tests, two-client
 catalog tests, transport tests, and full UI smoke checks are included.
 
+Validation so far: 203 tests plus 3 subtests pass in the clean community virtual
+environment. Lint and the publication guard pass. The portable Windows app builds,
+and its isolated packaged startup/shutdown test passes. Initial GitHub CI also
+passed; portable preview artifacts are built through the manual build workflow.
+The local executable is `dist/xCAL-community/xCAL.exe`; run it normally to try
+the onboarding screen, or use `--smoke-test` for an isolated automatic check.
+
 Real OAuth/multi-account Drive writes have NOT been tested against your team
 account. No new team folder was created and no private setup was uploaded.
 Do not distribute this preview as production-ready yet. See ARCHITECTURE.md for

@@ -4,13 +4,14 @@ import os
 import sys
 import threading
 import webbrowser
-import tempfile
+import hashlib
 from pathlib import Path
 from typing import Callable, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from utils import google_drive_client
+import config
 
 
 def download_and_open(
@@ -22,7 +23,8 @@ def download_and_open(
     """Download a Drive file into a temp folder and reveal it in Explorer."""
     def _worker():
         try:
-            dest = Path(tempfile.gettempdir()) / "xcal_xrk" / filename
+            cache_key = hashlib.sha256(file_id.encode()).hexdigest()[:24]
+            dest = config.DATA_DIR / "telemetry_cache" / cache_key / Path(filename).name
             dest.parent.mkdir(parents=True, exist_ok=True)
             google_drive_client.download_file(file_id, dest)
             webbrowser.open(str(dest.parent))

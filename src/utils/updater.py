@@ -209,7 +209,7 @@ def download_installer(info: UpdateInfo) -> Path:
     if not re.fullmatch(r"xCAL-Setup-[0-9.]+\.exe", asset_name, re.I):
         raise ValueError("The update does not provide a valid xCAL installer")
 
-    target_dir = Path(tempfile.gettempdir()) / "xcal-updates"
+    target_dir = Path(tempfile.gettempdir()) / "xcal-community-updates"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / asset_name
     partial = target.with_suffix(target.suffix + ".part")

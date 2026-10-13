@@ -35,7 +35,8 @@ def setup_logging() -> None:
 
     if config.DEBUG:
         try:
-            path = config.APP_ROOT / "xcal_debug.log"
+            config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+            path = config.DATA_DIR / "xcal_debug.log"
             file_handler = logging.FileHandler(path, encoding="utf-8")
             file_handler.setFormatter(fmt)
             file_handler.setLevel(logging.DEBUG)

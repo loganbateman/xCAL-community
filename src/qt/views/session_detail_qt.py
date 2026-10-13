@@ -1095,7 +1095,9 @@ class SessionDetailView(QWidget):
                 return download_path
             if local_path and local_path.is_file():
                 return local_path
-            dest = Path(tempfile.gettempdir()) / "xcal_session_data" / node.name
+            import hashlib
+            cache_key = hashlib.sha256(str(node.id).encode()).hexdigest()[:24]
+            dest = config.DATA_DIR / "telemetry_cache" / cache_key / Path(node.name).name
             dest.parent.mkdir(parents=True, exist_ok=True)
             partial = dest.with_name(dest.name + ".part")
             partial.unlink(missing_ok=True)
@@ -1397,8 +1399,6 @@ class SessionDetailView(QWidget):
         candidates = [
             Path(node.local_path) if node.local_path else None,
             offline_store.video_cache_path(folder_id, node),
-            Path(tempfile.gettempdir()) / "xcal_videos"
-            / str(folder_id) / self._safe_video_name(node.name),
         ]
         return next((path for path in candidates if path and path.is_file()
                      and (node.size is None or path.stat().st_size == node.size)), None)

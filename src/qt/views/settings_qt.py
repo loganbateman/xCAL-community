@@ -213,6 +213,8 @@ class SettingsView(QWidget):
             if not re.fullmatch(r"[A-Za-z0-9_-]+", folder):
                 raise ValueError("Paste a Google Drive folder URL or folder ID.")
             client = json.loads(client_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(client, dict) or not isinstance(client.get("installed"), dict):
+                raise ValueError("Choose a Google Desktop OAuth client JSON object.")
             installed = client.get("installed", {})
             if not installed.get("client_id") or not installed.get("client_secret"):
                 raise ValueError("Choose a Desktop OAuth client JSON, not a token or service-account key.")
