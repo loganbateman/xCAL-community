@@ -1,0 +1,27 @@
+name: Build portable community preview
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt pytest pyinstaller
+      - run: ./build.ps1
+        shell: pwsh
+      - name: Test packaged startup and shutdown
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath './dist/xCAL-community/xCAL.exe' -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
+          if ($app.ExitCode -ne 0) { throw 'Packaged smoke test failed.' }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: xCAL-community-preview-windows
+          path: dist/xCAL-community/
+          retention-days: 7
