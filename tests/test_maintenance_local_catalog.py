@@ -20,6 +20,9 @@ def test_schedule_and_session_types_save_offline_in_community_catalog(tmp_path, 
     # credentials are needed to edit either setting in Community.
     reopened = DriveStore(catalog.path)
     monkeypatch.setattr(db, "get_client", lambda: reopened)
+    reopened.table("app_docs").insert({"key": "app_update_chunk_000", "data": {"content": "not session metadata"}}).execute()
+    classified = reopened.table("app_docs").select("key,data").like("key", "session_type:%").execute().data
+    assert [entry["key"] for entry in classified] == ["session_type:local-session"]
     assert maintenance_store.load_snapshot().policy == saved.policy
     session_types.CACHE_PATH.unlink()
     assert session_types.refresh() == {"local-session": "race"}

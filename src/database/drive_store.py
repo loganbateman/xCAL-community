@@ -304,6 +304,15 @@ class Query:
         self.filters.append(lambda row: row.get(field) != value)
         return self
 
+    def like(self, field, pattern):
+        import re
+        expression = "".join(".*" if char == "%" else "." if char == "_"
+                             else re.escape(char) for char in pattern)
+        regex = re.compile(expression, re.DOTALL)
+        self.filters.append(lambda row: isinstance(row.get(field), str)
+                            and regex.fullmatch(row[field]) is not None)
+        return self
+
     def is_(self, field, value):
         if value != "null":
             raise ValueError("Only null filtering is supported.")

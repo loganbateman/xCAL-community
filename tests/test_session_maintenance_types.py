@@ -189,3 +189,21 @@ def test_classification_save_uses_guarded_stable_id_document(monkeypatch):
     st.save("stable-folder-id", "race")
     assert calls[-1] == ("update", {"key": "session_type:stable-folder-id", "updated_at": "revision"})
     assert st.cached_types() == {"stable-folder-id": "race"}
+
+
+def test_classification_refresh_filters_documents_before_downloading(monkeypatch):
+    filters = []
+
+    class Query:
+        def select(self, columns):
+            assert columns == "key,data"
+            return self
+        def like(self, field, pattern):
+            filters.append((field, pattern))
+            return self
+        def execute(self):
+            assert filters == [("key", "session_type:%")]
+            return SimpleNamespace(data=[{"key": "session_type:folder", "data": {"type": "race"}}])
+
+    monkeypatch.setattr(st.db, "get_client", lambda: SimpleNamespace(table=lambda table: Query()))
+    assert st.refresh() == {"folder": "race"}

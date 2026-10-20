@@ -52,7 +52,8 @@ def classify(session_id, name="", path="", types=None):
 
 
 def refresh():
-    rows = db.get_client().table("app_docs").select("key,data").execute().data or []
+    rows = (db.get_client().table("app_docs").select("key,data")
+            .like("key", PREFIX + "%").execute().data or [])
     values = {}
     for row in rows:
         key, data = row.get("key", ""), row.get("data")
