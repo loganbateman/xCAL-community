@@ -18,6 +18,7 @@ import offline_store
 from database.models import Setup
 from utils import google_drive_client, updater
 from utils import team_naming
+from utils import team_setup_fields
 from qt.sidebar import Sidebar
 from qt.theme import stylesheet
 from qt.workers import run_async
@@ -42,6 +43,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._closing = False
+        self._restart_on_exit = False
         self._allow_close = False
         self._offline_syncing = False
         self._sync_events = {}
@@ -53,7 +55,7 @@ class MainWindow(QMainWindow):
         self._drive_connected = False
         self._catalog_cache_refreshing = False
         self._catalog_cache_last = 0.0
-        self.setWindowTitle(config.APP_TITLE)
+        self.setWindowTitle(config.APP_TITLE + (" - Offline recovery" if config.RECOVERY_MODE else ""))
         self.resize(1280, 820)
         self.setMinimumSize(1080, 680)
         if config.LOGO_ICO.exists():
@@ -76,11 +78,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         # Pages
+        team_setup_fields.apply(team_setup_fields.load())
         self._sessions = SessionsView()
         self._sessions.open_session.connect(self._open_session)
         self._settings = SettingsView(
             on_reconnect=self._connect,
-            on_naming_changed=self._naming_changed)
+            on_naming_changed=self._naming_changed,
+            on_setup_fields_changed=self._setup_parameters_changed)
         self._settings.install_requested.connect(self._launch_update_installer)
         self._cheat = CheatSheetView()
         self._compare = CompareView()
@@ -105,6 +109,7 @@ class MainWindow(QMainWindow):
         self._workspace.detail.sync_status_changed.connect(
             self._refresh_sync_indicator)
         self._setup_builder = SetupBuilderView()
+        self._settings.maintenance_changed.connect(lambda: self._setup_builder.refresh_maintenance(reload_context=True))
         self._setup_builder.back.connect(self._back_from_setup)
         self._setup_builder.saved.connect(self._setup_saved)
 
@@ -183,6 +188,7 @@ class MainWindow(QMainWindow):
             return
         self._sessions._sessions = sessions
         cache.save_sessions(sessions)
+        self._setup_builder.refresh_maintenance(reload_context=True)
         self._sessions._last_signature = self._sessions._signature(
             sessions, self._sessions._counts)
         self._sessions._populate_seasons()
@@ -282,11 +288,14 @@ class MainWindow(QMainWindow):
         self._compare.preload_a(setup)
 
     def _connect(self, attempt: int = 1):
-        if self._closing:
+        if self._closing or config.RECOVERY_MODE:
             return
 
         def _check():
             supabase_ok = db.check_connection()
+            if supabase_ok:
+                import maintenance_store
+                maintenance_store.load_snapshot()
             drive_ok = google_drive_client.check_connection()
             if drive_ok:
                 # Prime the locked Google identity while online so future
@@ -300,6 +309,14 @@ class MainWindow(QMainWindow):
             self._cloud_connected = ok
             self._supabase_connected = supabase_ok
             self._drive_connected = drive_ok
+            self._setup_builder.refresh_maintenance(reload_context=True)
+            if supabase_ok:
+                from utils import team_membership
+                self._settings._show_team_profile(db.fetch_app_doc(team_membership.TEAM_DOC))
+                document = team_setup_fields.load()
+                import setup_fields as sf
+                if document != sf.CUSTOM_FIELD_DEFINITIONS:
+                    self._setup_parameters_changed(document)
             self._refresh_sync_indicator()
             if self._sync_queue_dialog is not None:
                 self._sync_queue_dialog.set_connections(
@@ -322,6 +339,8 @@ class MainWindow(QMainWindow):
             on_error=lambda _m: _done((False, False)))
 
     def _sync_offline_work(self):
+        if config.RECOVERY_MODE:
+            return
         if self._closing or self._offline_syncing or offline_store.pending_sync_summary().total == 0:
             self._refresh_sync_indicator()
             return
@@ -419,6 +438,7 @@ class MainWindow(QMainWindow):
             baselines, setups, inventory = result
             offline_store.cache_setup_catalog(baselines, setups)
             offline_store.cache_inventory(inventory)
+            self._setup_builder.refresh_maintenance(reload_context=True)
 
         def _error(_message):
             self._catalog_cache_refreshing = False
@@ -465,7 +485,7 @@ class MainWindow(QMainWindow):
             "installer from GitHub Releases when you are ready.")
 
         download_btn = None
-        if info.download_url:
+        if info.download_url and info.sha256:
             download_btn = message.addButton(
                 "Install Update", QMessageBox.AcceptRole)
         release_btn = None
@@ -503,6 +523,34 @@ class MainWindow(QMainWindow):
         if self._sessions._loaded:
             self._sessions._render_hero()
             self._sessions._render()
+
+    def _setup_parameters_changed(self, document):
+        from PySide6.QtCore import QThread
+        old = self._setup_builder
+        if (self._stack.currentWidget() is old or old.has_unsaved_changes() or old.is_saving()):
+            return False
+        team_setup_fields.apply(document)
+        replacement = SetupBuilderView()
+        replacement.back.connect(self._back_from_setup)
+        replacement.saved.connect(self._setup_saved)
+        self._stack.addWidget(replacement)
+        self._stack.removeWidget(old)
+        old.setParent(self)
+        old.hide()
+        self._setup_builder = replacement
+        self._pages["SetupBuilder"] = replacement
+        self._compare.invalidate()
+        def retire():
+            if any(thread.isRunning() for thread in old.findChildren(QThread)):
+                QTimer.singleShot(100, retire)
+            else:
+                old.deleteLater()
+        retire()
+        return True
+
+    def restart(self):
+        self._restart_on_exit = True
+        self.close()
 
     def closeEvent(self, event):  # noqa: N802 (Qt override)
         # Network calls cannot be safely force-terminated inside C extensions.

@@ -19,6 +19,21 @@ USER_DATA_DIR = Path(os.getenv("XCAL_DATA_DIR") or (_user_data_root / "xCAL-comm
 ENV_PATH = USER_DATA_DIR / "settings.env"
 
 
+def _default_oauth_client_file() -> Path:
+    """Use a maintainer-injected public client in packaged builds.
+
+    Desktop OAuth client configuration identifies the application; user tokens
+    remain private in USER_DATA_DIR. Source checkouts deliberately do not carry
+    the client configuration.
+    """
+    candidates = []
+    if getattr(sys, "_MEIPASS", None):
+        candidates.append(Path(sys._MEIPASS) / "resources" / "oauth-client.json")
+    candidates.append(APP_ROOT / "resources" / "oauth-client.json")
+    return next((path for path in candidates if path.is_file()),
+                USER_DATA_DIR / "oauth-client.json")
+
+
 def clean_drive_folder_id(raw: str) -> str:
     """Extract a bare Drive folder ID from a pasted value or full URL.
 
@@ -40,23 +55,31 @@ def clean_drive_folder_id(raw: str) -> str:
 
 def reload_environment() -> None:
     global GOOGLE_DRIVE_FOLDER_ID, GOOGLE_OAUTH_CLIENT_FILE
-    global DATA_DIR
+    global DATA_DIR, RECOVERY_MODE
     load_dotenv(ENV_PATH, override=True)
     GOOGLE_DRIVE_FOLDER_ID = clean_drive_folder_id(
         os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
     )
     GOOGLE_OAUTH_CLIENT_FILE = os.getenv(
         "GOOGLE_OAUTH_CLIENT_FILE",
-        str(USER_DATA_DIR / "oauth-client.json"),
+        str(_default_oauth_client_file()),
     )
-    workspace = hashlib.sha256(GOOGLE_DRIVE_FOLDER_ID.encode()).hexdigest()[:24] if GOOGLE_DRIVE_FOLDER_ID else "local"
-    DATA_DIR = USER_DATA_DIR / "teams" / workspace
+    DATA_DIR = workspace_dir(GOOGLE_DRIVE_FOLDER_ID)
+    RECOVERY_MODE = os.getenv("XCAL_RECOVERY_MODE", "").strip() == "1"
+    if RECOVERY_MODE:
+        GOOGLE_DRIVE_FOLDER_ID = ""
+        DATA_DIR = workspace_dir("")
+
+
+def workspace_dir(folder_id):
+    workspace = hashlib.sha256(folder_id.encode()).hexdigest()[:24] if folder_id else "local"
+    return USER_DATA_DIR / "teams" / workspace
 
 
 reload_environment()
 
-APP_TITLE = "xCAL â€” Community Preview"
-APP_VERSION = "0.1.0"
+APP_TITLE = "xCAL - Community Preview"
+APP_VERSION = "0.1.1"
 APP_GEOMETRY = "1280x800"
 APP_MIN_SIZE = (1100, 700)
 

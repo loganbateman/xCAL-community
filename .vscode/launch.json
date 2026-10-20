@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "xCAL Community (isolated)",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/src/main.py",
+    "args": ["--onboarding"],
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "console": "internalConsole",
+    "justMyCode": true
+  }]
+}

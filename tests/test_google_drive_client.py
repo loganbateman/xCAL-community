@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import ANY, Mock, patch
 
+from googleapiclient.errors import HttpError
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -84,6 +86,20 @@ class GoogleDriveClientTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 google_drive_client.GoogleDriveError, "offline"):
             google_drive_client.current_user(refresh=True)
+
+    @patch("utils.google_drive_client._service")
+    def test_disabled_drive_api_has_short_actionable_error(self, service):
+        response = Mock(status=403, reason="Forbidden")
+        service.return_value.about.return_value.get.return_value.execute.side_effect = HttpError(
+            response,
+            b'{"error":{"message":"Google Drive API has not been used in project 123 before or it is disabled."}}',
+        )
+
+        with self.assertRaisesRegex(
+                google_drive_client.GoogleDriveError,
+                "sign-in succeeded.*Drive API is not enabled"):
+            google_drive_client.current_user(
+                interactive=True, refresh=True, allow_cached=False)
 
     @patch("utils.google_drive_client.current_user")
     def test_noncritical_audit_lookup_never_blocks_local_save(self, current_user):

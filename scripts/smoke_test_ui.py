@@ -13,6 +13,8 @@ def main():
     with TemporaryDirectory(prefix='xcal-community-smoke-') as temporary:
         os.environ['XCAL_DATA_DIR'] = temporary
         os.environ['GOOGLE_DRIVE_FOLDER_ID'] = ''
+        recovery = '--recovery' in sys.argv
+        os.environ['XCAL_RECOVERY_MODE'] = '1' if recovery else ''
         os.environ['QT_QPA_PLATFORM'] = 'offscreen'
         from PySide6.QtCore import QTimer, QThread
         from PySide6.QtWidgets import QApplication
@@ -30,6 +32,8 @@ def main():
                 state['passed'] = (config.GOOGLE_DRIVE_FOLDER_ID == ''
                                    and not (config.USER_DATA_DIR / 'google_token.json').exists()
                                    and window._stack.currentWidget() is window._settings
+                                   and config.RECOVERY_MODE == recovery
+                                   and (not recovery or 'Offline recovery' in window.windowTitle())
                                    and window._workspace.detail._tabs.tabText(0) == 'Setup/Notes')
                 window.close()
                 if any(thread.isRunning() for thread in window.findChildren(QThread)):

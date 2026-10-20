@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 
 import config
 import cache
+import session_types
 import database.client as db
 import offline_store
 from utils import google_drive_client
@@ -146,6 +147,10 @@ class NewSessionDialog(QDialog):
         self._date = DatePickerEdit()
         self._date.setText(date.today().isoformat())
         form.addRow("Date", self._date)
+        self._session_type = QComboBox()
+        for kind, label in session_types.TYPES.items():
+            self._session_type.addItem(label, kind)
+        form.addRow("Session type", self._session_type)
 
         self._name = QLineEdit()
         self._name.setPlaceholderText("Halloween 100 2026")
@@ -199,7 +204,7 @@ class SessionCard(QFrame):
         title.setObjectName("CardTitle")
         mid.addWidget(title)
 
-        bits = []
+        bits = [session_types.TYPES[session_types.classify(s.id, s.name, s.path)]]
         if kart_tag:
             bits.append(f"{kart_tag}")
         if n_setups:
@@ -307,6 +312,12 @@ class SessionsView(QWidget):
         self._season.setFixedWidth(180)
         self._season.currentIndexChanged.connect(self._render)
         bar.addWidget(self._season)
+        self._type_filter = QComboBox()
+        self._type_filter.addItem("All session types", None)
+        for kind, label in session_types.TYPES.items():
+            self._type_filter.addItem(label, kind)
+        self._type_filter.currentIndexChanged.connect(self._render)
+        bar.addWidget(self._type_filter)
         bar.addStretch(1)
         newb = QPushButton("New Session")
         newb.setObjectName("Primary")
@@ -393,6 +404,10 @@ class SessionsView(QWidget):
                   on_done=self._on_refreshed, on_error=self._on_refresh_error)
 
     def _drive_refresh(self, counts_generation):
+        try:
+            session_types.refresh()
+        except Exception:
+            pass  # Keep cached classifications available while offline.
         # Drive traversal and Supabase badge counts are independent. Fetch them
         # together so refresh duration is the slower call, not both added up.
         from concurrent.futures import ThreadPoolExecutor
@@ -539,6 +554,7 @@ class SessionsView(QWidget):
                 s.name,
                 s.path,
                 s.season,
+                session_types.classify(s.id, s.name, s.path),
                 tuple(sorted(
                     (node.id, node.name, node.size) for node in s.xrks)),
             ) for s in sessions)),
@@ -635,6 +651,9 @@ class SessionsView(QWidget):
         season_f = self._season.currentText()
 
         def match(s):
+            kind = self._type_filter.currentData()
+            if kind and session_types.classify(s.id, s.name, s.path) != kind:
+                return False
             if season_f != "All seasons" and s.season != season_f:
                 return False
             if q:
@@ -713,13 +732,25 @@ class SessionsView(QWidget):
                 self, "Name Required", "Please enter a session name.")
             return
 
+        new_type = dialog._session_type.currentData()
+
         def _create():
-            return google_drive_client.create_session_folder(
+            folder_id = google_drive_client.create_session_folder(
                 name, season or None)
+            try:
+                session_types.save(folder_id, new_type)
+            except Exception as exc:
+                return folder_id, str(exc)
+            return folder_id, None
+
+        def _created(result):
+            self.refresh(force=True)
+            if result[1]:
+                QMessageBox.warning(self, "Session created", "The session was created, but its type could not be saved. Open the session to set its type.\n\n" + result[1])
 
         run_async(
             self, _create,
-            on_done=lambda _fid: self.refresh(force=True),
+            on_done=_created,
             on_error=lambda message: QMessageBox.critical(
                 self, "Create Session Failed", message))
 

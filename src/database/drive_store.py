@@ -67,6 +67,7 @@ class DriveStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = RLock()
+        self.sync_lock = RLock()
         self.transport = transport
         self.last_sync_error = None
         with self.connection() as connection:
@@ -224,9 +225,11 @@ class DriveStore:
             if not config.GOOGLE_DRIVE_FOLDER_ID:
                 return {"pending": self.pending_count(), "conflicts": len(self.conflicts()), "local_only": True}
             self.transport = DriveJournal(config.GOOGLE_DRIVE_FOLDER_ID)
-        with self.lock:
+        # Serialize network passes separately. Local catalog reads/saves must
+        # never wait for a slow Google request to release the database lock.
+        with self.sync_lock:
             self._pull()
-            with self.connection() as connection:
+            with self.lock, self.connection() as connection:
                 pending = [json.loads(row[0]) for row in connection.execute(
                     "SELECT body FROM events WHERE uploaded=0 ORDER BY id")]
             waiting = {event["id"]: event for event in pending}
@@ -234,7 +237,7 @@ class DriveStore:
                 from qt.workers import check_interruption
                 check_interruption()
                 self.transport.append(event)
-                with self.connection() as connection:
+                with self.lock, self.connection() as connection:
                     connection.execute("UPDATE events SET uploaded=1 WHERE id=?", (event["id"],))
             self._pull()
         return {"pending": self.pending_count(), "conflicts": len(self.conflicts()), "local_only": False}
@@ -253,7 +256,7 @@ class DriveStore:
         with self.connection() as connection:
             known = {row[0] for row in connection.execute("SELECT id FROM events")}
         incoming = self.transport.read_unknown(known)
-        with self.connection() as connection:
+        with self.lock, self.connection() as connection:
             for event in incoming:
                 self._validate_event(event)
                 connection.execute("INSERT OR IGNORE INTO events VALUES (?,?,1)",

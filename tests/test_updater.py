@@ -1,212 +1,155 @@
-from __future__ import annotations
-
-import sys
+"""Release trust and interrupted-download coverage; no real network or installers."""
 import hashlib
-import tempfile
-import unittest
+import io
 from pathlib import Path
+from unittest.mock import Mock
+import unittest
 import re
-from unittest.mock import patch
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import config
+import pytest
+import requests
 from utils import updater
 
-
-class _Response:
-    def __init__(self, status_code=200, payload=None):
-        self.status_code = status_code
-        self._payload = payload or {}
-
-    def json(self):
-        return self._payload
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONTENT = b"synthetic executable bytes"
+DIGEST = hashlib.sha256(CONTENT).hexdigest()
+URL = "https://github.com/loganbateman/xCAL-community/releases/download/v9.0.0/xCAL-Setup-9.0.0.exe"
 
 
-class _DownloadResponse:
-    def __init__(self, content: bytes):
-        self._content = content
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def raise_for_status(self):
-        return None
-
-    def iter_content(self, chunk_size=None):
-        del chunk_size
-        yield self._content
+def release(digest=DIGEST, url=URL):
+    return {"tag_name": "v9.0.0", "html_url": "https://untrusted.invalid",
+            "assets": [{"name": "xCAL-Setup-9.0.0.exe", "browser_download_url": url,
+                        "digest": "sha256:" + digest}]}
 
 
-class UpdaterTests(unittest.TestCase):
-    def setUp(self):
-        self.original_version = config.APP_VERSION
-        config.APP_VERSION = "0.4.0"
+def response(payload=None, content=CONTENT, status=200, location=None):
+    result = Mock(status_code=status, headers={"Location": location} if location else {})
+    result.json.return_value = payload or release()
+    result.iter_content.return_value = [content]
+    result.__enter__ = Mock(return_value=result)
+    result.__exit__ = Mock(return_value=False)
+    return result
 
-    def tearDown(self):
-        config.APP_VERSION = self.original_version
 
-    @patch("utils.updater._manifest_update", return_value=None)
-    @patch("utils.updater.requests.get")
-    def test_detects_new_release_and_prefers_installer(self, get, _manifest):
-        get.return_value = _Response(
-            payload={
-                "tag_name": "v0.5.0",
-                "html_url": "https://github.com/loganbateman/xCAL-community/releases/v0.5.0",
-                "assets": [
-                    {
-                        "name": "xCAL-0.5.0.zip",
-                        "browser_download_url": "https://example.com/app.zip",
-                    },
-                    {
-                        "name": "xCAL-Setup-0.5.0.exe",
-                        "browser_download_url": "https://example.com/setup.exe",
-                    },
-                ],
-            },
-        )
+def info():
+    return updater.UpdateInfo("0.1.0", latest_version="9.0.0", update_available=True,
+                              asset_name="xCAL-Setup-9.0.0.exe", download_url=URL, sha256=DIGEST)
 
-        info = updater.check_for_update()
 
-        self.assertTrue(info.update_available)
-        self.assertEqual(info.latest_version, "0.5.0")
-        self.assertEqual(info.asset_name, "xCAL-Setup-0.5.0.exe")
-        self.assertEqual(info.download_url, "https://example.com/setup.exe")
+def test_team_records_cannot_supply_update_metadata(monkeypatch):
+    fetch = Mock(side_effect=AssertionError("Must never read team update manifests"))
+    monkeypatch.setattr("database.client.fetch_app_doc", fetch)
+    get = Mock(return_value=response())
+    monkeypatch.setattr(updater.requests, "get", get)
+    result = updater.check_for_update()
+    assert result.sha256 == DIGEST
+    assert result.release_url == "https://github.com/loganbateman/xCAL-community/releases/tag/v9.0.0"
+    assert not hasattr(result, "chunk_keys")
+    fetch.assert_not_called()
+    assert get.call_args.args[0] == updater.LATEST_RELEASE_URL
+    assert get.call_args.kwargs["allow_redirects"] is False
 
-    @patch("utils.updater._manifest_update", return_value=None)
-    @patch("utils.updater.requests.get")
-    def test_private_repo_returns_actionable_message(self, get, _manifest):
-        get.return_value = _Response(status_code=404)
 
-        info = updater.check_for_update()
+@pytest.mark.parametrize("payload", [release(digest=""), release(url="https://attacker.invalid/app.exe")])
+def test_unverified_asset_never_offers_installation(monkeypatch, payload):
+    monkeypatch.setattr(updater.requests, "get", Mock(return_value=response(payload)))
+    result = updater.check_for_update()
+    assert result.update_available
+    assert not result.download_url
+    assert not result.sha256
 
-        self.assertFalse(info.update_available)
-        self.assertIn("private", info.message.lower())
 
-    @patch("utils.updater._manifest_update", return_value=None)
-    @patch("utils.updater.requests.get")
-    def test_current_release_is_not_update(self, get, _manifest):
-        get.return_value = _Response(payload={"tag_name": "v0.4.0"})
+def test_api_failure_does_not_fall_back_to_team_data(monkeypatch):
+    monkeypatch.setattr(updater.requests, "get", Mock(side_effect=requests.ConnectionError()))
+    assert not updater.check_for_update().update_available
 
-        info = updater.check_for_update()
 
-        self.assertFalse(info.update_available)
-        self.assertIn("up to date", info.message)
+def test_verified_download_and_launch_rechecks_hash(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "check_for_update", info)
+    monkeypatch.setattr(updater.requests, "get", Mock(return_value=response()))
+    directory = tmp_path / "download"
+    directory.mkdir()
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", lambda **kwargs: str(directory))
+    target = updater.download_installer(info())
+    assert target.read_bytes() == CONTENT
+    launch = Mock()
+    monkeypatch.setattr(updater.subprocess, "Popen", launch)
+    updater.launch_installer(target)
+    launch.assert_called_once()
+    with pytest.raises(ValueError, match="verified"):
+        updater.launch_installer(target)
 
-    @patch("utils.updater.db.fetch_app_doc")
-    def test_manifest_can_report_private_repo_update(self, fetch_app_doc):
-        fetch_app_doc.return_value = {
-            "version": "0.6.0",
-            "release_url": "https://github.com/loganbateman/xCAL-community/releases/tag/v0.6.0",
-            "download_url": "https://github.com/loganbateman/xCAL-community/releases/download/v0.6.0/xCAL-Setup-0.6.0.exe",
-            "asset_name": "xCAL-Setup-0.6.0.exe",
-            "sha256": "a" * 64,
-            "chunk_keys": ["app_update_chunk_000", "app_update_chunk_001"],
-        }
 
-        info = updater.check_for_update()
+def test_changed_installer_cannot_execute(monkeypatch, tmp_path):
+    target = tmp_path / "installer.exe"
+    target.write_bytes(b"tampered")
+    updater._verified_downloads[target.resolve()] = DIGEST
+    launch = Mock()
+    monkeypatch.setattr(updater.subprocess, "Popen", launch)
+    with pytest.raises(ValueError, match="changed"):
+        updater.launch_installer(target)
+    launch.assert_not_called()
 
-        self.assertTrue(info.update_available)
-        self.assertEqual(info.latest_version, "0.6.0")
-        self.assertEqual(info.asset_name, "xCAL-Setup-0.6.0.exe")
-        self.assertEqual(info.sha256, "a" * 64)
-        self.assertEqual(info.chunk_keys, (
-            "app_update_chunk_000", "app_update_chunk_001"))
 
-    @patch("utils.updater.db.fetch_app_doc")
-    def test_v041_through_v043_detect_v051_manifest(self, fetch_app_doc):
-        fetch_app_doc.return_value = {
-            "version": "0.5.1",
-            "release_url": (
-                "https://github.com/loganbateman/xCAL-community/releases/tag/v0.5.1"),
-            "download_url": (
-                "https://github.com/loganbateman/xCAL-community/releases/download/"
-                "v0.5.1/xCAL-Setup-0.5.1.exe"),
-            "asset_name": "xCAL-Setup-0.5.1.exe",
-        }
+def test_arbitrary_local_executable_cannot_launch(tmp_path):
+    target = tmp_path / "anything.exe"
+    target.write_bytes(CONTENT)
+    with pytest.raises(ValueError, match="verified"):
+        updater.launch_installer(target)
 
-        for old_version in ("0.4.1", "0.4.2", "0.4.3"):
-            with self.subTest(old_version=old_version):
-                config.APP_VERSION = old_version
-                info = updater.check_for_update()
-                self.assertTrue(info.update_available)
-                self.assertEqual(info.latest_version, "0.5.1")
-                self.assertEqual(
-                    info.download_url,
-                    "https://github.com/loganbateman/xCAL-community/releases/download/"
-                    "v0.5.1/xCAL-Setup-0.5.1.exe",
-                )
 
-    @patch("utils.updater.requests.get")
-    def test_download_installer_verifies_manifest_hash(self, get):
-        content = b"verified installer bytes"
-        get.return_value = _DownloadResponse(content)
-        info = updater.UpdateInfo(
-            current_version="0.4.3",
-            latest_version="0.5.5",
-            update_available=True,
-            download_url=(
-                "https://github.com/loganbateman/xCAL-community/releases/download/"
-                "v0.5.5/xCAL-Setup-0.5.5.exe"),
-            asset_name="xCAL-Setup-0.5.5.exe",
-            sha256=hashlib.sha256(content).hexdigest(),
-        )
+def test_forged_info_is_rejected_before_download(monkeypatch):
+    monkeypatch.setattr(updater, "check_for_update", lambda: updater.UpdateInfo("0.1.0"))
+    get = Mock()
+    monkeypatch.setattr(updater.requests, "get", get)
+    with pytest.raises(ValueError, match="verified"):
+        updater.download_installer(info())
+    get.assert_not_called()
 
-        with tempfile.TemporaryDirectory() as directory, patch(
-                "utils.updater.tempfile.gettempdir", return_value=directory):
-            path = updater.download_installer(info)
 
-            self.assertEqual(path.read_bytes(), content)
+@pytest.mark.parametrize("bad_content", [b"tampered", b""])
+def test_bad_download_cleans_staging_and_never_launches(monkeypatch, tmp_path, bad_content):
+    monkeypatch.setattr(updater, "check_for_update", info)
+    monkeypatch.setattr(updater.requests, "get", Mock(return_value=response(content=bad_content)))
+    directory = tmp_path / "download"
+    directory.mkdir()
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", lambda **kwargs: str(directory))
+    with pytest.raises(ValueError):
+        updater.download_installer(info())
+    assert not directory.exists()
 
-    def test_download_installer_rejects_non_release_url(self):
-        info = updater.UpdateInfo(
-            current_version="0.5.4",
-            latest_version="0.5.5",
-            update_available=True,
-            download_url="https://example.com/xCAL-Setup-0.5.5.exe",
-            asset_name="xCAL-Setup-0.5.5.exe",
-        )
 
-        with self.assertRaisesRegex(ValueError, "official xCAL release"):
-            updater.download_installer(info)
+def test_stream_interruption_cleans_partial_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "check_for_update", info)
+    download = response()
+    def broken_stream(**kwargs):
+        yield b"partial"
+        raise requests.ConnectionError("interrupted")
+    download.iter_content.side_effect = broken_stream
+    monkeypatch.setattr(updater.requests, "get", Mock(return_value=download))
+    directory = tmp_path / "download"
+    directory.mkdir()
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", lambda **kwargs: str(directory))
+    with pytest.raises(requests.ConnectionError):
+        updater.download_installer(info())
+    assert not directory.exists()
 
-    @patch("utils.updater.db.fetch_app_doc")
-    @patch("utils.updater.requests.get")
-    def test_download_installer_reassembles_shared_chunks(self, get, fetch_doc):
-        import base64
-        chunks = [b"private GitHub ", b"release bridge"]
-        content = b"".join(chunks)
-        documents = {
-            f"app_update_chunk_{index:03d}": {
-                "version": "0.5.6",
-                "index": index,
-                "content": base64.b64encode(chunk).decode("ascii"),
-            }
-            for index, chunk in enumerate(chunks)
-        }
-        fetch_doc.side_effect = lambda key: documents[key]
-        info = updater.UpdateInfo(
-            current_version="0.5.5",
-            latest_version="0.5.6",
-            update_available=True,
-            download_url=(
-                "https://github.com/loganbateman/xCAL-community/releases/download/"
-                "v0.5.6/xCAL-Setup-0.5.6.exe"),
-            asset_name="xCAL-Setup-0.5.6.exe",
-            sha256=hashlib.sha256(content).hexdigest(),
-            chunk_keys=tuple(documents),
-        )
 
-        with tempfile.TemporaryDirectory() as directory, patch(
-                "utils.updater.tempfile.gettempdir", return_value=directory):
-            path = updater.download_installer(info)
+def test_redirect_outside_github_is_rejected_before_contact(monkeypatch):
+    get = Mock(return_value=response(status=302, location="https://attacker.invalid/installer.exe"))
+    monkeypatch.setattr(updater.requests, "get", get)
+    with pytest.raises(ValueError, match="outside"):
+        updater._download(URL, io.BytesIO())
+    assert get.call_count == 1
 
-            self.assertEqual(path.read_bytes(), content)
-        get.assert_not_called()
+
+def test_github_asset_redirect_is_allowed(monkeypatch):
+    get = Mock(side_effect=[response(status=302, location="https://release-assets.githubusercontent.com/asset"),
+                            response()])
+    monkeypatch.setattr(updater.requests, "get", get)
+    target = io.BytesIO()
+    assert updater._download(URL, target) == DIGEST
+    assert target.getvalue() == CONTENT
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -238,7 +181,3 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("supabase", spec)
         self.assertNotIn("credentials.json", spec)
         self.assertNotIn('".env"', spec)
-
-
-if __name__ == "__main__":
-    unittest.main()

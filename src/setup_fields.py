@@ -208,6 +208,21 @@ INVENTORY_FIELD_CATEGORIES = {
 }
 
 
+CUSTOM_FIELD_DEFINITIONS = {"schema": 1, "fields": []}
+
+
+def custom_fields(section=None):
+    return [Field(item["key"], item["label"], item["unit"], item["kind"])
+            for item in CUSTOM_FIELD_DEFINITIONS["fields"]
+            if item["active"] and (section is None or item["section"] == section)]
+
+
+def section_fields(section):
+    builtin = {"front": FRONT_FIELDS, "rear": REAR_FIELDS,
+               "engine": ENGINE_FIELDS, "tires": TIRE_FIELDS}.get(section, [])
+    return list(builtin) + custom_fields(section)
+
+
 def all_value_fields() -> list[Field]:
     """Every field (main + detail + corners), corner keys already prefixed."""
     fields: list[Field] = []
@@ -219,4 +234,5 @@ def all_value_fields() -> list[Field]:
     fields += DETAIL_AXLE_FIELDS
     for code in CORNERS:
         fields += corner_fields(code)
+    fields += custom_fields()
     return fields

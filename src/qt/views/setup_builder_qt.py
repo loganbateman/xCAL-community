@@ -25,16 +25,21 @@ from PySide6.QtWidgets import (
 import config
 import database.client as db
 import offline_store
+import maintenance
+import maintenance_store
+import cache
 from database.models import Setup
 import setup_fields as sf
 from utils import google_drive_client
 from qt.workers import run_async
 from qt.widgets import DatePickerEdit, ScrollSafeComboBox
+from qt.maintenance_checklist import MaintenanceChecklist
 from PIL import Image, ImageQt
 
 NONE = "\u2014 None \u2014"
 
 _AUDIT_LABELS = {
+    maintenance.CHECKS_KEY: "Pre-session Checks / Maintenance",
     "name": "Setup Name",
     "track": "Track",
     "driver": "Driver",
@@ -48,6 +53,12 @@ _AUDIT_LABELS = {
 }
 _AUDIT_LABELS.update({field.key: field.display_label
                       for field in sf.all_value_fields()})
+
+
+def _audit_field_label(key):
+    return next((item["label"] + (f" ({item['unit']})" if item["unit"] else "")
+                 for item in sf.CUSTOM_FIELD_DEFINITIONS["fields"] if item["key"] == key),
+                _AUDIT_LABELS.get(key, key.replace("_", " ").title()))
 
 
 def _audit_value(value) -> str:
@@ -70,6 +81,24 @@ def _run_name(run: dict, position: int) -> str:
     )))
     name = f"Run {number}" if number else f"Run {position + 1}"
     return f"{name} ({timestamp})" if timestamp else name
+
+
+def _maintenance_history_lines(before, after) -> list[str]:
+    old = before if isinstance(before, dict) else {}
+    new = after if isinstance(after, dict) else {}
+    lines = []
+    for key in sorted(set(old) | set(new)):
+        if old.get(key) == new.get(key):
+            continue
+        event = new.get(key) or old.get(key)
+        if not isinstance(event, dict):
+            continue
+        state = "Completed" if event.get("checked") and key in new else "Unchecked"
+        label = event.get("label") or "Maintenance item"
+        timestamp = event.get("completed_at") or event.get("recorded_at")
+        when = _SetupHistoryDialog._format_time(timestamp) if timestamp else ""
+        lines.append(f"{label}: {state}" + (f" · {when}" if when else ""))
+    return lines
 
 
 def _run_history_lines(before, after) -> list[str]:
@@ -100,13 +129,12 @@ def _run_history_lines(before, after) -> list[str]:
                     if old_values.get(field) != new_values.get(field):
                         lines.append(
                             f"{_run_name(run, index)} · "
-                            f"{_AUDIT_LABELS.get(field, field)}: "
+                            f"{_audit_field_label(field)}: "
                             f"{_audit_value(old_values.get(field))} → "
                             f"{_audit_value(new_values.get(field))}")
                 continue
             label = ("Session Notes / Driver Feedback"
-                     if key == sf.RUN_NOTES_KEY else _AUDIT_LABELS.get(
-                         key, key.replace("_", " ").title()))
+                     if key == sf.RUN_NOTES_KEY else _audit_field_label(key))
             lines.append(
                 f"{_run_name(run, index)} \u00b7 {label}: "
                 f"{_audit_value(previous.get(key))} \u2192 "
@@ -193,11 +221,13 @@ class _SetupHistoryDialog(QDialog):
             for key, change in (entry.get("changes") or {}).items():
                 if not isinstance(change, dict):
                     continue
-                if key == sf.RUNS_KEY:
-                    section = QLabel("Runs & Session Notes")
+                if key in (sf.RUNS_KEY, maintenance.CHECKS_KEY):
+                    section = QLabel(_AUDIT_LABELS[key])
                     section.setObjectName("CardTitle")
                     card_layout.addWidget(section)
-                    for line in _run_history_lines(
+                    formatter = (_run_history_lines if key == sf.RUNS_KEY
+                                 else _maintenance_history_lines)
+                    for line in formatter(
                             change.get("before"), change.get("after")):
                         detail = QLabel(f"\u2022 {line}")
                         detail.setWordWrap(True)
@@ -205,8 +235,7 @@ class _SetupHistoryDialog(QDialog):
                         card_layout.addWidget(detail)
                     continue
                 base_key = key.removesuffix("__part_revision")
-                label = _AUDIT_LABELS.get(
-                    base_key, base_key.replace("_", " ").title())
+                label = _audit_field_label(base_key)
                 if key.endswith("__part_revision"):
                     label += " Part Revision"
                 detail = QLabel(
@@ -376,6 +405,8 @@ class _PartPickerCard(QFrame):
 class _PartPickerDialog(QDialog):
     """Search, sort, and deliberately select active or archived inventory."""
 
+    partCreated = Signal(object)
+
     def __init__(self, category, items, current_text="", current_ref=None,
                  parent=None, allow_custom=True):
         super().__init__(parent)
@@ -389,11 +420,18 @@ class _PartPickerDialog(QDialog):
         self.selected_item = None
         self.custom_text = None
         self._allow_custom = allow_custom
+        self._creating = False
 
         root = QVBoxLayout(self)
         title = QLabel(f"Choose from {category}")
         title.setObjectName("H2")
-        root.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, 1)
+        self._new_part_btn = QPushButton("+ New part")
+        self._new_part_btn.setObjectName("Ghost")
+        self._new_part_btn.clicked.connect(self._create_part)
+        heading.addWidget(self._new_part_btn)
+        root.addLayout(heading)
         hint = QLabel(
             "Search and sort the Parts inventory. Archived parts are hidden by "
             "default, but can be shown and deliberately selected.")
@@ -451,6 +489,41 @@ class _PartPickerDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
         self._refresh()
+
+    def _create_part(self):
+        from qt.views.parts_qt import PartDialog, _create_inventory_item
+        if self._creating:
+            return
+        dialog = PartDialog(self._category, parent=self)
+        # This shortcut creates inside the branch being browsed.
+        dialog._category.setEnabled(False)
+        if dialog.exec() != QDialog.Accepted or not dialog.result_item:
+            return
+        self._creating = True
+        self.setEnabled(False)
+
+        def done(part):
+            self._creating = False
+            self.setEnabled(True)
+            self._items.append(part)
+            self._candidate_id = part.id
+            self._search.clear()
+            self._refresh()
+            if self._list.currentItem():
+                self._list.scrollToItem(self._list.currentItem())
+            self.partCreated.emit(part)
+
+        def failed(message):
+            self._creating = False
+            self.setEnabled(True)
+            QMessageBox.warning(self, "Could not create part", message)
+
+        run_async(self, lambda: _create_inventory_item(dialog.result_item),
+                  on_done=done, on_error=failed)
+
+    def reject(self):
+        if not self._creating:
+            super().reject()
 
     @staticmethod
     def _quantity_text(item):
@@ -589,6 +662,7 @@ class _PartPickerDialog(QDialog):
 # Session-specific readings that must never be carried over when prefilling
 # from a baseline or copying another setup.
 _NO_PREFILL_KEYS = {
+    maintenance.CHECKS_KEY,
     "air_temp", "track_temp", "run_date", "run_number", "fastest_lap",
     "session_number", "session_length", "laps", "driver_feedback",
     sf.RUNS_KEY,
@@ -844,9 +918,6 @@ class SetupBuilderView(QWidget):
         self._detected_track: str | None = None
         self._drivers = []
         self._chassis = []
-        self._driver_parts = []
-        self._kart_parts = []
-        self._track_parts = []
         self._tracks = []
         self._fields: dict[str, QWidget] = {}
         self._run_fields: dict[str, QWidget] = {}
@@ -854,6 +925,7 @@ class SetupBuilderView(QWidget):
         self._run_index = 0
         self._switching_run = False
         self._baseline_run_setup = None
+        self._maintenance_context = None
         self._inventory_options: dict[str, list] = {}
         self._initial_state = None
         self._saving = False
@@ -936,6 +1008,11 @@ class SetupBuilderView(QWidget):
         self._build_chassis()
         self._build_runs()
         self._build_notes()
+        self._maintenance = MaintenanceChecklist(self)
+        self._body.addWidget(self._maintenance)
+        self._maintenance.changed.connect(self._update_dirty_styles)
+        self._chassis_cb.textChanged.connect(self.refresh_maintenance)
+        self.refresh_maintenance()
         self._body.addStretch(1)
         self._wire_dirty_tracking()
 
@@ -1008,6 +1085,7 @@ class SetupBuilderView(QWidget):
             self,
             allow_custom=False,
         )
+        dialog.partCreated.connect(self._remember_created_part)
         if dialog.exec() != QDialog.Accepted:
             return
         if dialog.selected_item is not None:
@@ -1028,7 +1106,7 @@ class SetupBuilderView(QWidget):
         grid.setSpacing(8)
 
         grid.addWidget(self._field_card(
-            sf.MAIN_GROUPS[0][0], sf.MAIN_GROUPS[0][1], 4), 0, 0)
+            sf.MAIN_GROUPS[0][0], sf.section_fields("front"), 4), 0, 0)
         grid.addWidget(self._field_card(
             "Front Track", sf.FRONT_TRACK_FIELDS, 4), 1, 0)
 
@@ -1036,11 +1114,13 @@ class SetupBuilderView(QWidget):
         grid.addWidget(self._field_card(
             "Rear Track", sf.REAR_TRACK_FIELDS, 3), 3, 0)
         grid.addWidget(self._field_card(
-            sf.MAIN_GROUPS[2][0], sf.MAIN_GROUPS[2][1], 4), 4, 0)
+            sf.MAIN_GROUPS[2][0], sf.section_fields("rear"), 4), 4, 0)
         grid.addWidget(self._field_card(
-            sf.MAIN_GROUPS[1][0], sf.MAIN_GROUPS[1][1], 4), 5, 0)
+            sf.MAIN_GROUPS[1][0], sf.section_fields("engine"), 4), 5, 0)
         grid.addWidget(self._field_card(
-            sf.MAIN_GROUPS[3][0], sf.MAIN_GROUPS[3][1], 4), 6, 0)
+            sf.MAIN_GROUPS[3][0], sf.section_fields("tires"), 4), 6, 0)
+        if sf.custom_fields("session"):
+            grid.addWidget(self._field_card("Additional Session Parameters", sf.custom_fields("session"), 4), 7, 0)
         self._body.addWidget(host)
 
     def _field_card(self, title, fields, cols) -> QFrame:
@@ -1164,6 +1244,7 @@ class SetupBuilderView(QWidget):
             getattr(widget, "_inventory_revision_ref", None),
             self,
         )
+        dialog.partCreated.connect(self._remember_created_part)
         if dialog.exec() != QDialog.Accepted:
             return
         if dialog.selected_item is not None:
@@ -1176,6 +1257,11 @@ class SetupBuilderView(QWidget):
         elif dialog.custom_text is not None:
             self._set_field_text(widget, dialog.custom_text)
         self._update_dirty_styles()
+
+    def _remember_created_part(self, part):
+        items = self._inventory_options.setdefault(part.category, [])
+        items[:] = [item for item in items if item.id != part.id]
+        items.append(part)
 
     def _build_runs(self):
         card, lay = self._card("Runs & Session Notes")
@@ -1297,8 +1383,14 @@ class SetupBuilderView(QWidget):
         legacy["id"] = str(uuid4())
         return [legacy]
 
-    def _load_runs(self, runs, index=0):
+    def _load_runs(self, runs, index=0, base_values=None):
+        self._baseline_run_setup = None
+        self._runs = []
+        self._run_index = 0
         self._baseline_run_setup = self._capture_run_setup()
+        for key, value in (base_values or {}).items():
+            if key.startswith("custom_") and key not in self._fields:
+                self._baseline_run_setup["values"][key] = deepcopy(value)
         normalized = [
             _split_legacy_run_timestamp(deepcopy(run))
             for run in runs if isinstance(run, dict)
@@ -1412,12 +1504,19 @@ class SetupBuilderView(QWidget):
         ]
 
     def _capture_run_setup(self):
-        return {
-            "values": {key: self._field_text(edit) for key, edit in self._fields.items()},
-            "inventory_refs": {key: deepcopy(getattr(edit, "_inventory_revision_ref", None))
-                               for key, edit in self._fields.items()
-                               if key in sf.INVENTORY_FIELD_CATEGORIES},
-        }
+        previous = (self._baseline_run_setup if self._run_index == 0 else
+                    self._runs[self._run_index].get(sf.RUN_SETUP_KEY, {})) if self._runs else {}
+        previous = previous or {}
+        values = deepcopy(previous.get("values", {}))
+        if self._setup:
+            for key, value in (self._setup.data or {}).items():
+                if key.startswith("custom_"):
+                    values.setdefault(key, value)
+        values.update({key: self._field_text(edit) for key, edit in self._fields.items()})
+        refs = deepcopy(previous.get("inventory_refs", {}))
+        refs.update({key: deepcopy(getattr(edit, "_inventory_revision_ref", None))
+                     for key, edit in self._fields.items() if key in sf.INVENTORY_FIELD_CATEGORIES})
+        return {"values": values, "inventory_refs": refs}
 
     # ── Load / populate ───────────────────────────────────────────────────────
 
@@ -1433,6 +1532,8 @@ class SetupBuilderView(QWidget):
         self._folder_path = folder_path or ""
         self._folder_name = folder_name or ""
         self._setup = setup
+        self._maintenance_context = None
+        self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}) if setup else {})
         self._is_baseline = bool(setup and setup.is_baseline)
         self._initial_state = None
         self._detected_track = _detect_track(folder_name, folder_path)
@@ -1524,9 +1625,6 @@ class SetupBuilderView(QWidget):
             return
         (self._drivers, self._chassis, self._tracks,
          self._inventory_options) = result
-        self._driver_parts = self._inventory_options.get("Drivers", [])
-        self._kart_parts = self._inventory_options.get("Karts", [])
-        self._track_parts = self._inventory_options.get("Tracks", [])
         if (self._setup and self._setup.track
                 and self._setup.track not in self._tracks):
             self._tracks.append(self._setup.track)
@@ -1535,6 +1633,7 @@ class SetupBuilderView(QWidget):
             self._track.setCurrentText(self._detected_track)
         if self._setup:
             self._populate(self._setup)
+        self.refresh_maintenance(reload_context=True)
         self._update_baseline_name_placeholder()
         date_edit = self._run_fields.get("run_date")
         if (date_edit is not None and not self._field_text(date_edit).strip()
@@ -1665,11 +1764,13 @@ class SetupBuilderView(QWidget):
 
         runs_dirty = self._serialized_runs(include_blank=True) != state["runs"]
         notes_dirty = self._notes.toPlainText() != state["notes"]
+        maintenance_dirty = self._maintenance.records() != state.get(maintenance.CHECKS_KEY, {})
+        self._set_dirty(self._maintenance, maintenance_dirty)
         self._set_dirty(self._feedback, runs_dirty)
         for edit in self._run_fields.values():
             self._set_dirty(edit, runs_dirty)
         self._set_dirty(self._notes, notes_dirty)
-        dirty_flags.extend((runs_dirty, notes_dirty))
+        dirty_flags.extend((runs_dirty, notes_dirty, maintenance_dirty))
         is_dirty = any(dirty_flags)
         self._set_save_status(
             "\u25CF  Unsaved changes", config.COLOR_WARNING, is_dirty)
@@ -1699,6 +1800,7 @@ class SetupBuilderView(QWidget):
                 for key in sorted(sf.INVENTORY_FIELD_CATEGORIES)),
             "runs": self._serialized_runs(include_blank=True),
             "notes": self._notes.toPlainText(),
+            maintenance.CHECKS_KEY: self._maintenance.records(),
         }
 
     def has_unsaved_changes(self) -> bool:
@@ -1735,6 +1837,8 @@ class SetupBuilderView(QWidget):
             self._set_field_text(self._fields[key], value, refs.get(key))
         self._load_runs(state["runs"])
         self._notes.setPlainText(state["notes"])
+        self._maintenance.set_records(state.get(maintenance.CHECKS_KEY, {}))
+        self.refresh_maintenance()
         self._update_dirty_styles()
 
     def _populate(self, setup: Setup, only_empty=False, inherit=False):
@@ -1781,9 +1885,11 @@ class SetupBuilderView(QWidget):
             if edit and not (only_empty and self._field_text(edit)):
                 self._set_field_text(edit, value, revision_refs.get(key))
         if not inherit and not only_empty:
-            self._load_runs(self._runs_from_setup(setup))
+            self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}))
+            self._load_runs(self._runs_from_setup(setup), base_values=setup.data)
         if setup.notes and not only_empty:
             self._notes.setPlainText(setup.notes)
+        self.refresh_maintenance()
 
     def _refresh_after_concurrent_merge(self, setup: Setup):
         """Show the complete merged row, including fields removed remotely."""
@@ -1803,10 +1909,34 @@ class SetupBuilderView(QWidget):
             self._track, setup.track or NONE, identity_refs.get("track"))
         for key, edit in self._fields.items():
             self._set_field_text(edit, values.get(key, ""), revision_refs.get(key))
-        self._load_runs(self._runs_from_setup(setup))
+        self._load_runs(self._runs_from_setup(setup), base_values=setup.data)
         self._notes.setPlainText(setup.notes or "")
+        self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}))
+        self.refresh_maintenance()
 
     # ── Prefill / copy ────────────────────────────────────────────────────────
+
+    def refresh_maintenance(self, *_args, reload_context=False):
+        if not hasattr(self, "_maintenance"):
+            return
+        if self._maintenance_context is None or reload_context:
+            sessions, _age = cache.load_sessions()
+            self._maintenance_context = (maintenance_store.cached_snapshot().policy,
+                                         sessions, offline_store.load_setup_catalog())
+        policy, sessions, catalog = self._maintenance_context
+        selected = self._chassis_cb.currentText().strip()
+        reference = self._identity_ref(self._chassis_cb)
+        legacy = next((item for item in self._chassis if item.name.casefold() == selected.casefold()), None)
+        legacy_id = legacy.id if legacy else (
+            self._setup.chassis_id if self._setup and
+            (self._setup.chassis_name or "").casefold() == selected.casefold() else None)
+        current = Setup(id=self._setup.id if self._setup else None,
+                        drive_folder_id=self._folder_id, drive_folder_path=self._folder_path or self._folder_name,
+                        is_baseline=self._is_baseline, chassis_name=selected if selected != NONE else None,
+                        chassis_id=legacy_id,
+                        data={"_identity_part_revisions": {"chassis": reference} if reference else {},
+                              maintenance.CHECKS_KEY: self._maintenance.records()})
+        self._maintenance.refresh(policy, current, sessions, catalog)
 
     def _show_setup_options(self):
         _SetupOptionsDialog(self, self).exec()
@@ -2042,6 +2172,21 @@ class SetupBuilderView(QWidget):
             return
         if not self._is_baseline and not self._folder_id:
             return
+        self._store_current_run()
+        from math import isfinite
+        snapshots = [self._baseline_run_setup or self._capture_run_setup()] + [
+            run.get(sf.RUN_SETUP_KEY, {}) for run in self._runs[1:]]
+        for position, snapshot in enumerate(snapshots):
+            for field in sf.custom_fields():
+                value = snapshot.get("values", {}).get(field.key)
+                if field.kind != "num" or value in (None, ""):
+                    continue
+                try:
+                    if not isfinite(float(value)):
+                        raise ValueError
+                except (TypeError, ValueError):
+                    QMessageBox.warning(self, "Invalid parameter value", f"Run {position + 1}: {field.label} must be a finite number.")
+                    return
         def _named(items, text):
             key = (text or "").strip().casefold()
             return next((item for item in items
@@ -2062,11 +2207,11 @@ class SetupBuilderView(QWidget):
             return None if text in ("", NONE) else _named(items, text)
 
         driver_part = _selected_part(
-            self._driver_parts, self._driver, driver_text)
+            self._inventory_options.get("Drivers", []), self._driver, driver_text)
         kart_part = _selected_part(
-            self._kart_parts, self._chassis_cb, chassis_text)
+            self._inventory_options.get("Karts", []), self._chassis_cb, chassis_text)
         track_part = _selected_part(
-            self._track_parts, self._track, track_text)
+            self._inventory_options.get("Tracks", []), self._track, track_text)
         driver = None if driver_text in ("", NONE) else _named(
             self._drivers, driver_text)
         chassis = None if chassis_text in ("", NONE) else _named(
@@ -2141,6 +2286,8 @@ class SetupBuilderView(QWidget):
         if self._setup and self._setup.data:
             data.update({k: v for k, v in self._setup.data.items()
                          if k not in field_keys})
+        if sf.CUSTOM_FIELD_DEFINITIONS["fields"]:
+            data["_custom_field_definitions"] = deepcopy(sf.CUSTOM_FIELD_DEFINITIONS)
         fields_by_key = {f.key: f for f in sf.all_value_fields()}
         self._store_current_run()
         baseline = self._baseline_run_setup or self._capture_run_setup()
@@ -2151,7 +2298,11 @@ class SetupBuilderView(QWidget):
             field = fields_by_key[key]
             if field.kind == "num":
                 try:
-                    data[key] = float(value) if "." in value else int(value)
+                    if key.startswith("custom_"):
+                        parsed = float(value)
+                        data[key] = int(parsed) if parsed.is_integer() else parsed
+                    else:
+                        data[key] = float(value) if "." in value else int(value)
                 except ValueError:
                     data[key] = value
             else:
@@ -2189,6 +2340,9 @@ class SetupBuilderView(QWidget):
         if runs:
             data[sf.RUNS_KEY] = runs
         setup.data = data
+        checks = self._maintenance.records()
+        if checks:
+            setup.data[maintenance.CHECKS_KEY] = checks
         setup.notes = self._notes.toPlainText().strip() or None
         setup.driver_id = driver.id if driver else None
         setup.driver_name = (
@@ -2248,6 +2402,8 @@ class SetupBuilderView(QWidget):
             saved.driver_name = saved.driver_name or setup.driver_name
             saved.chassis_name = saved.chassis_name or setup.chassis_name
             self._setup = saved
+            self._maintenance.set_records((saved.data or {}).get(maintenance.CHECKS_KEY, {}))
+            self.refresh_maintenance(reload_context=True)
             merged_concurrently = bool(
                 getattr(saved, "_concurrent_merged", False))
             if merged_concurrently:

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Maintenance and session types
+
+- Added setup checklists and maintenance with timestamped completions.
+- Added Settings → Maintenance for editable default and Practice, Qualifying,
+  and Race intervals, measured independently in sessions or days.
+- Added session type selection, classification of existing sessions, and a
+  session type filter. Community saves schedules and classifications to its own
+  offline catalog and team Drive journal.
+
+## 0.1.1 - Community beta hotfix
+
+- Fix setup saves rejecting Driver, Kart/Chassis and Track records created from
+  the picker during the same edit. Validation and selection now share the current
+  inventory list instead of separate startup snapshots.
+- Add regression coverage for Ctrl+S on session setups and baselines, preserving
+  the selected inventory IDs/revisions and rejecting genuinely unlisted values.
+
 ## 0.1.0 — Community development preview
 
 - Clean-history MIT community edition derived from the team app at v0.5.36.

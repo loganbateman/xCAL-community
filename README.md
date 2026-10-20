@@ -38,8 +38,9 @@ python -m pip install -r requirements.txt
 python src/main.py
 ```
 
-The first launch opens Settings. You can explore locally without Supabase or
-Google credentials. To collaborate, follow [Google Drive setup](docs/GOOGLE_DRIVE_SETUP.md).
+The first launch opens Create a Team / Join a Team. Developers can use
+`python src/main.py --preview-local` to explore without Google credentials.
+To collaborate, follow [Google Drive setup](docs/GOOGLE_DRIVE_SETUP.md).
 Configuration and tokens are stored outside the checkout, in a separate
 `xCAL-community` user-data directory. Each selected Drive has an isolated cache.
 
@@ -66,4 +67,7 @@ python scripts/check_publication.py
 ```
 
 See [architecture and current limitations](docs/ARCHITECTURE.md),
+[production-readiness checklist](docs/PRODUCTION_READINESS.md),
+[backup and recovery](docs/BACKUP_AND_RECOVERY.md),
+[update security](docs/UPDATE_SECURITY.md),
 [contributing](CONTRIBUTING.md), and [security](SECURITY.md).

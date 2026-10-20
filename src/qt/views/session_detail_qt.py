@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QDialogButtonBox, QLineEdit, QListWidget,
                                QListWidgetItem, QAbstractItemView, QInputDialog)
 import config
+import session_types
 import database.client as db
 import offline_store
 import setup_fields as sf
@@ -283,6 +284,10 @@ class SessionDetailView(QWidget):
         self._settings_button.setAccessibleName("Session settings")
         self._settings_button.clicked.connect(self._edit_session_settings)
         top.addWidget(self._settings_button)
+        self._type_button = QPushButton("Session type")
+        self._type_button.setObjectName("Secondary")
+        self._type_button.clicked.connect(self._edit_session_type)
+        top.addWidget(self._type_button)
         delete_session = QPushButton("Delete Session")
         delete_session.setObjectName("Danger")
         delete_session.setCursor(Qt.PointingHandCursor)
@@ -448,6 +453,7 @@ class SessionDetailView(QWidget):
         self._available_seasons = list(seasons or [])
         self._crumb.setText(folder_path or "")
         self._title.setText(folder_name or "Session")
+        self._type_button.setText(session_types.TYPES[session_types.classify(folder_id, folder_name, folder_path)] + " session")
         self._update_offline_status()
         self.refresh()
 
@@ -522,6 +528,32 @@ class SessionDetailView(QWidget):
     def refresh_setups(self):
         """Reload setup records without rescanning unchanged Drive telemetry."""
         self._load_setups()
+
+    def _edit_session_type(self):
+        if not self._folder_id:
+            return
+        kinds = list(session_types.TYPES)
+        current = session_types.classify(self._folder_id, self._folder_name, self._folder_path)
+        label, accepted = QInputDialog.getItem(
+            self, "Session type", "Classify this session for filters and maintenance intervals:",
+            list(session_types.TYPES.values()), kinds.index(current), False)
+        if not accepted:
+            return
+        kind = kinds[list(session_types.TYPES.values()).index(label)]
+        folder_id, folder_path, folder_name, season = self._folder_id, self._folder_path, self._folder_name, self._season
+        self._type_button.setEnabled(False)
+
+        def done(saved):
+            self._type_button.setEnabled(True)
+            if self._folder_id == folder_id:
+                self._type_button.setText(session_types.TYPES[saved] + " session")
+            self.session_updated.emit(folder_id, folder_path, folder_name, season)
+
+        def failed(message):
+            self._type_button.setEnabled(True)
+            QMessageBox.warning(self, "Session type was not saved", message)
+
+        run_async(self, lambda: session_types.save(folder_id, kind), on_done=done, on_error=failed)
 
     def _edit_session_settings(self):
         if not self._folder_id:

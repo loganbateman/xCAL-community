@@ -1,0 +1,8 @@
+{
+  "folders": [{"name": "xCAL Community", "path": "."}],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "window.title": "xCAL Community — ${activeEditorShort}${separator}${appName}",
+    "files.exclude": {"**/__pycache__": true, ".venv": true}
+  }
+}

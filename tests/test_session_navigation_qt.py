@@ -937,7 +937,9 @@ def test_settings_identity_is_read_only_google_profile():
     assert "Signed-in editor" in labels
     assert "Google email" in labels
     assert "Your Name" not in labels
-    assert settings.findChildren(QLineEdit) == [settings._drive_folder, settings._oauth_file]
+    assert set(settings.findChildren(QLineEdit)) == {
+        settings._drive_folder, settings._oauth_file, settings._team_name,
+        settings._invite_email, settings._join_code}
     settings.deleteLater()
 
 

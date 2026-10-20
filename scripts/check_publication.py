@@ -22,7 +22,7 @@ PATTERNS = [re.compile(pattern) for pattern in (
 
 
 def main():
-    result = subprocess.run(['git', 'ls-files', '-z'], cwd=ROOT, check=True, capture_output=True)
+    result = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT, check=True, capture_output=True)
     problems = []
     for name in result.stdout.decode('utf-8').split('\0'):
         if not name:

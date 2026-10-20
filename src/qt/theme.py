@@ -61,7 +61,7 @@ def stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 10px;
     }}
-    QFrame#Card:hover {{ background-color: {CARD_HI}; }}
+    QFrame#Card:hover {{ background-color: {CARD}; }}
     QFrame#Hero {{
         background-color: {CARD};
         border: 1px solid {BORDER};
@@ -198,6 +198,38 @@ def stylesheet() -> str:
     }}
     QListWidget#PartList::item:selected,
     QListWidget#PartList::item:hover {{ background-color: transparent; }}
+
+    /* Google Drive-inspired folder picker */
+    QDialog#DrivePicker {{ background-color: #202124; }}
+    QLabel#DriveBreadcrumb {{
+        background-color: #303134; color: #e8eaed;
+        border: 1px solid #5f6368; border-radius: 18px;
+        padding: 8px 14px; font-weight: 600;
+    }}
+    QPushButton#DriveAction {{
+        background-color: #303134; color: #e8eaed;
+        border: 1px solid #5f6368; border-radius: 18px;
+        padding: 7px 14px; font-weight: 600;
+    }}
+    QPushButton#DriveAction:hover {{ background-color: #3c4043; }}
+    QPushButton#DriveAction:disabled {{
+        color: #777b85; border-color: #45474d;
+    }}
+    QListWidget#DriveFolderList {{
+        background-color: #202124;
+        border: 1px solid #5f6368; border-radius: 10px; padding: 6px;
+    }}
+    QListWidget#DriveFolderList::item {{
+        background-color: transparent; color: #e8eaed;
+        border-radius: 8px; padding: 8px 12px;
+    }}
+    QListWidget#DriveFolderList::item:hover:!selected {{
+        background-color: #303134;
+    }}
+    QListWidget#DriveFolderList::item:selected {{
+        background-color: #394457; color: white;
+        border: 1px solid #8ab4f8;
+    }}
     QTableWidget::item {{ padding: 5px 7px; }}
     QHeaderView::section {{
         background-color: {CARD}; color: {TEXT};
@@ -236,4 +268,45 @@ def stylesheet() -> str:
     }}
     QTabBar::tab:selected {{ background: {ACCENT}; color: white; }}
     QTabBar::tab:hover:!selected {{ background: {CARD_HI}; color: {TEXT}; }}
+
+    /* Restrained settings surfaces and clear action hierarchy. */
+    QWidget#SettingsPage QFrame#Card {{
+        background-color: #2d3035; border: 1px solid #41454c;
+        border-radius: 10px;
+    }}
+    QWidget#SettingsPage QLabel#H1 {{ font-size: 24px; font-weight: 600; }}
+    QWidget#SettingsPage QLabel#H2 {{ font-size: 15px; font-weight: 600; }}
+    QWidget#SettingsPage QLabel#Muted {{ color: #b0b6bf; }}
+    QWidget#SettingsPage QPushButton {{ min-height: 22px; }}
+    QWidget#SettingsPage QPushButton#Secondary,
+    QWidget#SettingsPage QPushButton#Ghost {{
+        background-color: #353940; color: #e7e9ed;
+        border: 1px solid #505661; border-radius: 6px;
+        padding: 7px 14px; font-weight: 500;
+    }}
+    QWidget#SettingsPage QPushButton#Secondary:hover,
+    QWidget#SettingsPage QPushButton#Ghost:hover {{
+        background-color: #41464f; border-color: #717985;
+    }}
+    QWidget#SettingsPage QPushButton:disabled {{
+        color: #858b95; background-color: #303339; border-color: #41454c;
+    }}
+    QWidget#SettingsPage QLineEdit {{
+        background-color: #24272b; border: 1px solid #505661;
+        border-radius: 6px; padding: 9px 10px;
+    }}
+    QTabWidget#SettingsTabs::pane {{ border: none; }}
+    QTabWidget#SettingsTabs QTabBar::tab {{
+        background: transparent; color: #b0b6bf;
+        border: none; border-bottom: 2px solid transparent;
+        border-radius: 0; margin-right: 16px;
+        padding: 12px 6px; font-size: 13px; font-weight: 600;
+    }}
+    QTabWidget#SettingsTabs QTabBar::tab:selected {{
+        background: transparent; color: #ffffff;
+        border-bottom: 2px solid {ACCENT};
+    }}
+    QTabWidget#SettingsTabs QTabBar::tab:hover:!selected {{
+        color: #ffffff; background: #303339;
+    }}
     """

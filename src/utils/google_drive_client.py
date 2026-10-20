@@ -17,6 +17,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 import config
+from utils.atomic_files import atomic_write_text
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_PATH = config.USER_DATA_DIR / "google_token.json"
@@ -29,6 +30,25 @@ _current_user: "GoogleUser | None" = None
 
 class GoogleDriveError(RuntimeError):
     pass
+
+
+def _friendly_http_error(exc: HttpError) -> GoogleDriveError:
+    """Turn common Google API setup failures into user-facing guidance."""
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    content = getattr(exc, "content", b"")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+    detail = f"{getattr(exc, 'reason', '')} {content}".casefold()
+    if status == 403 and any(marker in detail for marker in (
+            "accessnotconfigured", "service_disabled", "service disabled",
+            "has not been used", "is disabled")):
+        return GoogleDriveError(
+            "Google sign-in succeeded, but the Google Drive API is not enabled "
+            "for this app's Cloud project. Enable the Google Drive API, wait a "
+            "few minutes for Google to apply the change, then try again.")
+    return GoogleDriveError(
+        f"Google Drive request failed"
+        f"{f' ({status})' if status else ''}. Please try again.")
 
 
 @dataclass(frozen=True)
@@ -97,12 +117,14 @@ def _load_credentials() -> Credentials | None:
 def _save_credentials(credentials: Credentials) -> None:
     try:
         TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_PATH.write_text(credentials.to_json(), encoding="utf-8")
+        atomic_write_text(TOKEN_PATH, credentials.to_json())
     except OSError as exc:
         raise GoogleDriveError(f"Could not save Google sign-in token: {exc}") from exc
 
 
 def _credentials(interactive: bool) -> Credentials | None:
+    if config.RECOVERY_MODE:
+        raise GoogleDriveError("This is an offline recovery copy. Google Drive access is disabled.")
     with _auth_lock:
         credentials = _load_credentials()
         if credentials and credentials.valid:
@@ -172,10 +194,10 @@ def _load_cached_user() -> GoogleUser | None:
 def _save_cached_user(user: GoogleUser) -> None:
     try:
         IDENTITY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        IDENTITY_PATH.write_text(json.dumps({
+        atomic_write_text(IDENTITY_PATH, json.dumps({
             "name": user.name,
             "email": user.email,
-        }), encoding="utf-8")
+        }))
     except OSError as exc:
         raise GoogleDriveError(
             f"Could not save Google editor identity: {exc}") from exc
@@ -219,11 +241,13 @@ def current_user(
         with _identity_lock:
             _current_user = user
         return user
-    except (GoogleDriveError, RefreshError, HttpError, TransportError, OSError):
+    except (GoogleDriveError, RefreshError, HttpError, TransportError, OSError) as exc:
         if allow_cached:
             user = cached_user()
             if user is not None:
                 return user
+        if isinstance(exc, HttpError):
+            raise _friendly_http_error(exc) from exc
         raise
 
 
@@ -294,6 +318,42 @@ def root_folder_id() -> str:
 
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def browse_folders(folder_id="root", location="children") -> list[dict]:
+    """List folder choices without downloading media or changing permissions."""
+    service = _worker_service()
+    nodes, token = [], None
+    while True:
+        if location == "drives":
+            response = service.drives().list(pageSize=100, pageToken=token,
+                                              fields="nextPageToken,drives(id,name)").execute()
+            nodes.extend(response.get("drives", []))
+        else:
+            if location == "shared":
+                query = f"sharedWithMe = true and mimeType = '{FOLDER_MIME}' and trashed = false"
+            else:
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
+                    raise GoogleDriveError("Invalid Drive folder ID.")
+                query = f"'{folder_id}' in parents and mimeType = '{FOLDER_MIME}' and trashed = false"
+            response = service.files().list(q=query, fields="nextPageToken,files(id,name)",
+                                             pageSize=1000, pageToken=token, orderBy="name",
+                                             supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+            nodes.extend(node for node in response.get("files", []) if node["name"] != ".xcal-catalog-v1")
+        token = response.get("nextPageToken")
+        if not token:
+            return sorted(nodes, key=lambda node: node["name"].casefold())
+
+
+def folder_details(folder_id) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
+        raise GoogleDriveError("Invalid Drive folder ID.")
+    folder = _worker_service().files().get(
+        fileId=folder_id, fields="id,name,mimeType,webViewLink,driveId,owners(emailAddress),capabilities(canAddChildren,canShare)",
+        supportsAllDrives=True).execute()
+    if folder.get("mimeType") != FOLDER_MIME:
+        raise GoogleDriveError("Choose a Google Drive folder, not a file.")
+    return folder
 
 IGNORED_LEGACY_SESSION_FOLDER_IDS = set()
 

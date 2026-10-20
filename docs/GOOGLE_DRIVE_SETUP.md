@@ -1,36 +1,47 @@
 # Connect any team's Google Drive
 
-This preview uses a team-owned Desktop OAuth client. There are no developer-owned
-cloud accounts, paid database requirements, shared Google passwords, or embedded
-tokens. The setup still requires a one-time Google Cloud configuration; a
-verified shared xCAL OAuth client is a future decision, not something this build
-pretends to provide.
+This preview does not yet ship a registered community Desktop OAuth client.
+There are no shared Google passwords or embedded user tokens. Public builds can
+inject one maintainer-owned Desktop client so every user gets normal Google
+sign-in without choosing a JSON file. The client must first be created and
+published in the xCAL Community Google Cloud project.
+
+## Public maintainer setup
+
+1. Create a dedicated Google Cloud project for xCAL Community and enable the
+   Google Drive API. Do not reuse the original xCAL project or client.
+2. Configure Google Auth Platform branding and audience. Use an External audience
+   for Google accounts outside one Workspace organization.
+3. Create an OAuth client of type **Desktop app** and download its JSON outside
+   this checkout.
+4. Build with `./build.ps1 -OAuthClient C:\private\community-client.json`.
+   The client configuration is injected into the packaged app; it is never
+   copied into the source tree. Each user's refresh token remains private in
+   their own xCAL Community user-data directory.
+5. Publish the consent configuration for production use. Because the current
+   folder browser requests the restricted full-Drive scope, complete Google's
+   required OAuth verification before calling the app open to arbitrary users.
 
 ## Team owner
 
-1. Create a dedicated xCAL folder in Google Drive. Share it with teammates who
-   need access. Editors can upload, edit, and delete team files; viewers cannot
-   contribute catalog edits. Do not share this folder publicly.
-2. In Google Cloud Console create a project, enable Google Drive API, and configure
-   Google Auth Platform consent. Use Internal only for an eligible Workspace
-   organization. For External testing, add the teammates as test users.
-3. Create an OAuth client of type **Desktop app** and download its JSON. Do not
-   choose a service-account key or a Web application client.
-4. Launch xCAL → Settings. Paste the shared folder URL, choose that JSON, then
-   click **Save connection and initialize catalog**. Review the confirmation.
-5. Sign in through Google's browser page. xCAL creates `.xcal-catalog-v1` inside
-   the chosen folder and saves the connection privately on this device.
-6. Restart xCAL. New shared catalog changes go to that folder, not Supabase.
+For a maintainer-built beta with the Community client included:
 
-The Desktop OAuth client JSON can be supplied privately to teammates. A Desktop
-client is not a server-side secret; individual refresh tokens are private and
-must never be shared. Do not post client configuration in this repository.
+1. Extract the full portable ZIP and open `xCAL.exe`.
+2. Choose **Create a Team**, sign in and choose/create a dedicated test folder.
+3. Confirm connection. xCAL initializes the catalog and restarts into that team.
+4. In Settings > Team invite the friend's named Google account with Editor access.
+5. Send the xCAL join code privately; Google's sharing email does not contain it.
+
+Team owners do not register their own Google client or choose JSON files in the
+packaged beta. Source-checkout developer configuration is maintainer setup only.
 
 ## Teammates
 
-Each teammate installs/runs xCAL, chooses the same folder and client JSON, and
-signs in with their own account. The owner must grant that account access to the
-folder and, in testing mode, include it in the OAuth test-user list.
+Each teammate extracts the same beta, chooses **Join a Team**, pastes the code
+and signs in with the exact Google account the owner invited. The owner must
+grant that account access to the folder. If the Community project's OAuth status
+still restricts access, the maintainer must resolve that Google-side restriction;
+joining an xCAL team cannot bypass it. Public verification is not claimed here.
 
 ## Important OAuth limitations
 

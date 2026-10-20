@@ -495,6 +495,8 @@ def _apply_setup_identity(setup: Setup, user) -> bool:
     if setup.created_by == _PENDING_SETUP_ACTOR:
         setup.created_by = user.audit_label
         changed = True
+    import maintenance
+    changed = maintenance.resolve_identities(setup, user) or changed
     return changed
 
 

@@ -216,3 +216,28 @@ def test_stale_conflict_preview_cannot_overwrite_new_materialized_state(team):
     with pytest.raises(CatalogConflict, match="comparison"):
         first.resolve("setups", "setup", setup(first), expected={"id": "setup", "notes": "stale"})
     assert first.conflicts()
+
+
+def test_slow_drive_request_does_not_block_local_catalog_reads(tmp_path):
+    from threading import Event, Thread
+    started, release, read_done = Event(), Event(), Event()
+    journal = Journal()
+    original_read = journal.read_unknown
+    def slow_read(known):
+        started.set()
+        release.wait(5)
+        return original_read(known)
+    journal.read_unknown = slow_read
+    store = DriveStore(tmp_path / "catalog.sqlite3", journal)
+    store.table("setups").insert({"name": "Offline safe"}).execute()
+    sync = Thread(target=store.sync)
+    reader = Thread(target=lambda: (store.table("setups").select().execute(), read_done.set()))
+    sync.start()
+    try:
+        assert started.wait(2)
+        reader.start()
+        assert read_done.wait(1), "A network request blocked the local UI catalog."
+    finally:
+        release.set()
+        sync.join(5)
+        reader.join(5)

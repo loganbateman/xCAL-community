@@ -22,3 +22,4 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python scripts/smoke_test_ui.py
+      - run: python scripts/smoke_test_ui.py --recovery

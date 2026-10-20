@@ -285,8 +285,9 @@ class CompareView(QWidget):
             bold=True, header=True)
         self._diff_lay.addWidget(header)
 
-        groups = list(sf.MAIN_GROUPS)
-        groups.append(("Session", sf.SESSION_FIELDS))
+        groups = [(title, sf.section_fields(section)) for (title, _fields), section in
+                  zip(sf.MAIN_GROUPS, ("front", "engine", "rear", "tires"))]
+        groups.append(("Session", list(sf.SESSION_FIELDS) + sf.custom_fields("session")))
         groups.append(("Axle Detail", sf.DETAIL_AXLE_FIELDS))
         for code in sf.CORNERS:
             name, _, _ = sf.CORNERS[code]
