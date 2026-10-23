@@ -78,21 +78,30 @@ def stylesheet() -> str:
     QLabel#CardSub {{ color: {MUTED}; font-size: 11px; }}
 
     /* Primary / secondary buttons */
+    QPushButton {{
+        background-color: #353940; color: #e7e9ed;
+        border: 1px solid #505661; border-radius: 6px;
+        padding: 7px 14px; font-weight: 500;
+    }}
+    QPushButton:hover {{ background-color: #41464f; border-color: #717985; }}
+    QPushButton:pressed {{ background-color: #454b55; border-color: #919aa8; }}
+    QPushButton:focus {{ border-color: #aab4c3; }}
+    QPushButton:disabled {{ color: #858b95; background-color: #303339; border-color: #41454c; }}
     QPushButton#Primary {{
         background-color: {ACCENT}; color: white;
         border: none; border-radius: 8px; padding: 8px 16px; font-weight: 600;
     }}
     QPushButton#Primary:hover {{ background-color: {ACCENT_HI}; }}
     QPushButton#Ghost {{
-        background-color: transparent; color: {MUTED};
-        border: 2px solid {BORDER}; border-radius: 8px; padding: 6px 13px;
+        background-color: #353940; color: #e7e9ed;
+        border: 1px solid #505661; border-radius: 6px; padding: 7px 14px;
     }}
     QPushButton#Ghost:hover {{
-        background-color: {CARD_HI}; color: {TEXT}; border-color: {MUTED};
+        background-color: #41464f; color: {TEXT}; border-color: #717985;
     }}
     QPushButton#Ghost:disabled {{
-        background-color: transparent; color: #777b85;
-        border: 2px solid {BORDER};
+        background-color: #303339; color: #858b95;
+        border: 1px solid #41454c;
     }}
     QPushButton#Danger {{
         background-color: transparent; color: #ff9da5;
@@ -325,13 +334,13 @@ def stylesheet() -> str:
     }}
     QTabWidget#SettingsTabs::pane {{ border: none; }}
     QTabWidget#SettingsTabs QTabBar::tab {{
-        background: transparent; color: #b0b6bf;
+        background: {CARD}; color: #c6cbd2;
         border: none; border-bottom: 2px solid transparent;
-        border-radius: 0; margin-right: 16px;
-        padding: 12px 6px; font-size: 13px; font-weight: 600;
+        border-radius: 6px; margin-right: 8px;
+        padding: 10px 16px; font-size: 13px; font-weight: 600;
     }}
     QTabWidget#SettingsTabs QTabBar::tab:selected {{
-        background: transparent; color: #ffffff;
+        background: #3b3034; color: #ffffff;
         border-bottom: 2px solid {ACCENT};
     }}
     QTabWidget#SettingsTabs QTabBar::tab:hover:!selected {{

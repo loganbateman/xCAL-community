@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import re
+from time import monotonic
 from uuid import uuid4
 
 from PySide6.QtCore import QPoint, QSize, QTimer, Qt, Signal
@@ -270,15 +271,21 @@ class _SetupOptionsDialog(QDialog):
 
     def __init__(self, builder, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Setup Settings")
+        self.setWindowTitle("Setup Actions")
         self.setMinimumWidth(560)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(12)
 
-        title = QLabel("Setup Settings")
+        title = QLabel("Setup Actions")
         title.setObjectName("H2")
         root.addWidget(title)
+        intro = QLabel(
+            "Bring in setup values, change where this setup is saved, or "
+            "review its history.")
+        intro.setObjectName("Muted")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
         destination = builder._folder_path or builder._folder_name
         context = QLabel(
             f"Current destination: {destination or 'Not selected'}")
@@ -286,7 +293,7 @@ class _SetupOptionsDialog(QDialog):
         context.setWordWrap(True)
         root.addWidget(context)
 
-        def add_action(label, description, callback, enabled=True):
+        def add_action(label, description, button_text, callback, enabled=True):
             card = QFrame()
             card.setObjectName("Card")
             row = QHBoxLayout(card)
@@ -300,7 +307,7 @@ class _SetupOptionsDialog(QDialog):
             hint.setWordWrap(True)
             copy.addWidget(hint)
             row.addLayout(copy, 1)
-            button = QPushButton("Open\u2026")
+            button = QPushButton(button_text)
             button.setObjectName("Ghost")
             button.setEnabled(enabled)
             button.clicked.connect(
@@ -309,15 +316,26 @@ class _SetupOptionsDialog(QDialog):
             root.addWidget(card)
             return button
 
-        self.load_button = add_action(
-            "Load setup values",
-            "Search any saved session setup or Parts baseline, then fill empty "
-            "fields or overwrite the current setup values.",
-            builder._copy_from_setup,
+        self.baseline_button = add_action(
+            "Apply a baseline",
+            "Start with a team baseline or the built-in OTK dry baseline. "
+            "Your setup name, driver, kart, track, and destination stay intact.",
+            "Choose baseline\u2026",
+            lambda: builder._copy_from_setup(source_kind="baseline"),
+        )
+        # Compatibility alias for integrations that only checked availability.
+        self.load_button = self.baseline_button
+        self.previous_button = add_action(
+            "Build from a previous setup",
+            "Reuse tuning values from a setup saved in another session without "
+            "changing this setup's identity or destination.",
+            "Choose setup\u2026",
+            lambda: builder._copy_from_setup(source_kind="previous"),
         )
         self.destination_button = add_action(
             "Change destination",
             "Move where this setup will be saved by choosing another session.",
+            "Choose session\u2026",
             builder._choose_destination,
             enabled=not builder._is_baseline,
         )
@@ -326,6 +344,7 @@ class _SetupOptionsDialog(QDialog):
             f"Revision history ({count})" if count else "Revision history",
             "See readable changes, timestamps, and the Google account that "
             "made each revision.",
+            "View history",
             builder._show_history,
             enabled=bool(builder._setup and builder._setup.id),
         )
@@ -337,6 +356,73 @@ class _SetupOptionsDialog(QDialog):
     def _launch(self, callback):
         self.accept()
         QTimer.singleShot(0, callback)
+
+
+class _NewSetupDialog(QDialog):
+    """Offer the setup source at creation time, before the user starts typing."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create Setup")
+        self.setMinimumWidth(590)
+        self.choice = "blank"
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 18)
+        root.setSpacing(12)
+        title = QLabel("How do you want to start?")
+        title.setObjectName("H2")
+        root.addWidget(title)
+        intro = QLabel(
+            "Choose a clean sheet, apply a team baseline, or reuse a setup "
+            "from an earlier session. You can still change this later from "
+            "Setup Actions.")
+        intro.setObjectName("Muted")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        def add_choice(label, description, button_text, choice, primary=False):
+            card = QFrame()
+            card.setObjectName("Card")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(14, 12, 14, 12)
+            copy = QVBoxLayout()
+            heading = QLabel(label)
+            heading.setObjectName("CardTitle")
+            copy.addWidget(heading)
+            hint = QLabel(description)
+            hint.setObjectName("Muted")
+            hint.setWordWrap(True)
+            copy.addWidget(hint)
+            row.addLayout(copy, 1)
+            button = QPushButton(button_text)
+            button.setObjectName("Primary" if primary else "Ghost")
+            button.clicked.connect(
+                lambda _checked=False, value=choice: self._choose(value))
+            row.addWidget(button)
+            root.addWidget(card)
+            return button
+
+        self.baseline_button = add_choice(
+            "Build from a baseline",
+            "Use your team's baseline or the included OTK dry starting point.",
+            "Choose baseline\u2026", "baseline", primary=True)
+        self.previous_button = add_choice(
+            "Build from a previous setup",
+            "Copy tuning values from a setup saved in an earlier session.",
+            "Choose setup\u2026", "previous")
+        self.blank_button = add_choice(
+            "Start blank",
+            "Create an empty setup and enter every value yourself.",
+            "Start blank", "blank")
+
+        cancel = QDialogButtonBox(QDialogButtonBox.Cancel)
+        cancel.rejected.connect(self.reject)
+        root.addWidget(cancel)
+
+    def _choose(self, choice):
+        self.choice = choice
+        self.accept()
 
 
 class _PartPickerEdit(QLineEdit):
@@ -667,6 +753,7 @@ class _PartPickerDialog(QDialog):
 # from a baseline or copying another setup.
 _NO_PREFILL_KEYS = {
     maintenance.CHECKS_KEY,
+    maintenance.SCOPE_KEY,
     "air_temp", "track_temp", "run_date", "run_number", "fastest_lap",
     "session_number", "session_length", "laps", "driver_feedback",
     sf.RUNS_KEY,
@@ -681,26 +768,52 @@ def _baseline_name(kart: str | None, track: str | None) -> str:
     return f"{scope} Baseline" if scope else "Universal Baseline"
 
 
+def _setup_copy_sources(setups, current_id=None, source_kind=None) -> list[Setup]:
+    """Return fresh copy candidates, including the unsaved built-in baseline."""
+    options = [
+        setup for setup in otk_baseline.add_when_team_has_no_copy(setups)
+        if setup.id != current_id
+    ]
+    if source_kind == "baseline":
+        return [setup for setup in options if setup.is_baseline]
+    if source_kind == "previous":
+        return [setup for setup in options if not setup.is_baseline]
+    return options
+
+
 class _CopySetupDialog(QDialog):
     """Searchable setup picker; avoids the unstable giant combo popup."""
 
-    def __init__(self, setups, label_fn, parent=None):
+    def __init__(self, setups, label_fn, parent=None, creation_mode=False,
+                 source_kind=None):
         super().__init__(parent)
-        self.setWindowTitle("Copy from setup")
+        self.setWindowTitle(
+            "Choose Baseline" if source_kind == "baseline"
+            else "Choose Previous Setup" if source_kind == "previous"
+            else "Copy from Setup")
         self.resize(720, 520)
         self._setups = setups
         self._label_fn = label_fn
         self.selected_setup = None
-        self.overwrite = False
+        self.overwrite = bool(creation_mode)
 
         root = QVBoxLayout(self)
-        title = QLabel("Copy values from another setup")
+        title = QLabel(
+            "Choose a baseline" if source_kind == "baseline"
+            else "Choose a previous setup" if source_kind == "previous"
+            else "Copy values from another setup")
         title.setObjectName("H2")
         root.addWidget(title)
         hint = QLabel(
-            "Search any Parts baseline or saved session setup, select one, then choose "
-            "whether to fill empty setup values or overwrite existing setup "
-            "values. The destination, name, and driver stay unchanged.")
+            ("Select a baseline to use as the starting point for this setup. "
+             if source_kind == "baseline" else
+             "Select a setup from an earlier session to reuse its tuning values. "
+             if source_kind == "previous" else
+             "Search any Parts baseline or saved session setup. ")
+            + ("The destination, name, driver, kart, and track stay unchanged."
+               if creation_mode else
+               "Choose whether to fill empty values or overwrite existing "
+               "values; setup identity and destination stay unchanged."))
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -715,21 +828,24 @@ class _CopySetupDialog(QDialog):
         self._list.itemDoubleClicked.connect(lambda _item: self.accept())
         root.addWidget(self._list, 1)
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Copy mode:"))
         self._mode = ScrollSafeComboBox()
-        self._mode.addItems([
-            "Fill empty setup values only",
-            "Overwrite setup values (preserve identity)",
-        ])
-        mode_row.addWidget(self._mode)
-        mode_row.addStretch(1)
-        root.addLayout(mode_row)
+        if not creation_mode:
+            mode_row = QHBoxLayout()
+            mode_row.addWidget(QLabel("Apply mode:"))
+            self._mode.addItems([
+                "Fill empty setup values only",
+                "Overwrite setup values (preserve identity)",
+            ])
+            mode_row.addWidget(self._mode)
+            mode_row.addStretch(1)
+            root.addLayout(mode_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        if creation_mode:
+            buttons.button(QDialogButtonBox.Ok).setText("Use selected setup")
         root.addWidget(buttons)
         self._filter("")
 
@@ -751,7 +867,8 @@ class _CopySetupDialog(QDialog):
         if item is None:
             return
         self.selected_setup = item.data(Qt.UserRole)
-        self.overwrite = self._mode.currentIndex() == 1
+        if self._mode.count():
+            self.overwrite = self._mode.currentIndex() == 1
         super().accept()
 
 
@@ -931,6 +1048,7 @@ class _KartOverlay(QWidget):
 class SetupBuilderView(QWidget):
     back = Signal()
     saved = Signal(object)
+    catalog_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -951,7 +1069,11 @@ class SetupBuilderView(QWidget):
         self._switching_run = False
         self._baseline_run_setup = None
         self._maintenance_context = None
+        self._maintenance_scope_id = str(uuid4())
         self._inventory_options: dict[str, list] = {}
+        self._reference_data_cache = None
+        self._reference_data_loaded_at = 0.0
+        self._reference_data_generation = 0
         self._initial_state = None
         self._saving = False
         self._load_generation = 0
@@ -990,11 +1112,12 @@ class SetupBuilderView(QWidget):
         top.addWidget(self._save_status)
         top.addStretch(1)
 
-        self._options_btn = QPushButton("Setup Settings")
+        self._options_btn = QPushButton("Setup Actions")
         self._options_btn.setObjectName("Ghost")
         self._options_btn.setCursor(Qt.PointingHandCursor)
         self._options_btn.setToolTip(
-            "Load another setup, change destination, or view revision history")
+            "Apply a baseline, copy a previous setup, change destination, or "
+            "view revision history")
         self._options_btn.clicked.connect(self._show_setup_options)
         top.addWidget(self._options_btn)
         root.addLayout(top)
@@ -1134,8 +1257,10 @@ class SetupBuilderView(QWidget):
             sf.MAIN_GROUPS[1][0], sf.section_fields("engine"), 4), 5, 0)
         grid.addWidget(self._field_card(
             sf.MAIN_GROUPS[3][0], sf.section_fields("tires"), 4), 6, 0)
-        if sf.custom_fields("session"):
-            grid.addWidget(self._field_card("Additional Session Parameters", sf.custom_fields("session"), 4), 7, 0)
+        for row, (section, label) in enumerate(sf.CUSTOM_FIELD_DEFINITIONS.get("sections", {}).items(), 8):
+            custom = sf.custom_fields(section)
+            if custom:
+                grid.addWidget(self._field_card(label, sf.ordered_fields(section, custom), 4), row, 0)
         self._body.addWidget(host)
 
     def _field_card(self, title, fields, cols) -> QFrame:
@@ -1162,6 +1287,7 @@ class SetupBuilderView(QWidget):
         return card
 
     def _field_cell(self, field) -> QVBoxLayout:
+        field = sf.display_field(field)
         lay = QVBoxLayout()
         lay.setSpacing(2)
         lab = QLabel(field.display_label)
@@ -1265,6 +1391,7 @@ class SetupBuilderView(QWidget):
         items = self._inventory_options.setdefault(part.category, [])
         items[:] = [item for item in items if item.id != part.id]
         items.append(part)
+        self.catalog_changed.emit()
 
     def _build_runs(self):
         card, lay = self._card()
@@ -1337,7 +1464,11 @@ class SetupBuilderView(QWidget):
         self.layout().insertWidget(1, self._run_toolbar)
 
         grid = AdaptiveGrid(4, 180)
-        for field in sf.RUN_FIELDS:
+        for field in sf.ordered_fields("session", list(sf.RUN_FIELDS) + sf.custom_fields("session")):
+            if field.key.startswith("custom_"):
+                grid.add_cell(self._field_cell(field))
+                continue
+            field = sf.display_field(field)
             cell = QVBoxLayout()
             cell.setSpacing(2)
             label = QLabel(field.display_label)
@@ -1593,6 +1724,11 @@ class SetupBuilderView(QWidget):
         self._folder_path = folder_path or ""
         self._folder_name = folder_name or ""
         self._setup = setup
+        self._maintenance_scope_id = str(
+            ((setup.data or {}).get(maintenance.SCOPE_KEY) if setup else "")
+            or uuid4())
+        self._offer_new_setup_choice = setup is None
+        self._new_setup_choice_shown = False
         self._maintenance_context = None
         self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}) if setup else {})
         self._is_baseline = bool(setup and setup.is_baseline)
@@ -1621,12 +1757,17 @@ class SetupBuilderView(QWidget):
         self._save_btn.setToolTip(
             ("Save Baseline" if self._is_baseline else "Save Setup")
             + " (Ctrl+S)")
-        self._options_btn.setText("Setup Settings")
+        self._options_btn.setText("Setup Actions")
         self._save_btn.setEnabled(False)
         self._clear_form()
         self._set_identity_controls_enabled(False)
 
+        reference_generation = self._reference_data_generation
+
         def _identity():
+            if (self._reference_data_cache is not None
+                    and monotonic() - self._reference_data_loaded_at < 60):
+                return deepcopy(self._reference_data_cache)
             try:
                 drivers = db.fetch_drivers()
             except Exception:
@@ -1659,7 +1800,11 @@ class SetupBuilderView(QWidget):
                         (item.name or "").casefold(), -int(item.revision or 1)))
                 for category, items in inventory_options.items()
             }
-            return drivers, chassis, tracks, inventory_options
+            result = drivers, chassis, tracks, inventory_options
+            if reference_generation == self._reference_data_generation:
+                self._reference_data_cache = deepcopy(result)
+                self._reference_data_loaded_at = monotonic()
+            return result
 
         run_async(
             self,
@@ -1669,6 +1814,12 @@ class SetupBuilderView(QWidget):
             on_error=lambda _message: self._identity_loaded(
                 load_generation, ([], [], [], {})),
         )
+
+    def invalidate_reference_data(self):
+        """Reload picker catalogs next time a setup opens after Parts changes."""
+        self._reference_data_generation += 1
+        self._reference_data_cache = None
+        self._reference_data_loaded_at = 0.0
 
     def set_return_context(self, context: str):
         """Match the Back label to the page that opened the builder."""
@@ -1714,6 +1865,9 @@ class SetupBuilderView(QWidget):
         self._update_dirty_styles()
         self._set_identity_controls_enabled(True)
         self._content_stack.setCurrentWidget(self._scroll)
+        if self._offer_new_setup_choice and not self._new_setup_choice_shown:
+            self._new_setup_choice_shown = True
+            QTimer.singleShot(0, self._show_new_setup_start)
 
     @staticmethod
     def _fill_combo(combo, values):
@@ -2036,15 +2190,40 @@ class SetupBuilderView(QWidget):
                         is_baseline=self._is_baseline, chassis_name=selected if selected != NONE else None,
                         chassis_id=legacy_id,
                         data={"_identity_part_revisions": {"chassis": reference} if reference else {},
+                              maintenance.SCOPE_KEY: self._maintenance_scope_id,
                               maintenance.CHECKS_KEY: self._maintenance.records()})
         self._maintenance.refresh(policy, current, sessions, catalog)
 
     def _show_setup_options(self):
         _SetupOptionsDialog(self, self).exec()
 
+    def _show_new_setup_start(self):
+        if not self._offer_new_setup_choice or self._setup is not None:
+            return
+        dialog = _NewSetupDialog(self)
+        self._new_setup_dialog = dialog
+        dialog.accepted.connect(self._new_setup_source_chosen)
+        dialog.rejected.connect(self._new_setup_source_closed)
+        dialog.open()
+
+    def _new_setup_source_chosen(self):
+        dialog = getattr(self, "_new_setup_dialog", None)
+        choice = dialog.choice if dialog is not None else "blank"
+        self._new_setup_source_closed()
+        if choice in ("baseline", "previous"):
+            QTimer.singleShot(
+                0, lambda source=choice: self._copy_from_setup(
+                    source_kind=source, creation_mode=True))
+
+    def _new_setup_source_closed(self):
+        dialog = getattr(self, "_new_setup_dialog", None)
+        if dialog is not None:
+            dialog.deleteLater()
+        self._new_setup_dialog = None
+
     def _set_options_busy(self, busy: bool):
         self._options_btn.setEnabled(not busy)
-        self._options_btn.setText("Loading\u2026" if busy else "Setup Settings")
+        self._options_btn.setText("Loading\u2026" if busy else "Setup Actions")
 
     def _choose_destination(self):
         if self._is_baseline:
@@ -2186,7 +2365,7 @@ class SetupBuilderView(QWidget):
 
         run_async(self, _fetch, on_done=_done, on_error=_error)
 
-    def _copy_from_setup(self):
+    def _copy_from_setup(self, source_kind=None, creation_mode=False):
         generation = self._load_generation
         self._set_options_busy(True)
 
@@ -2194,26 +2373,36 @@ class SetupBuilderView(QWidget):
             try:
                 baselines, saved_setups = db.fetch_setup_catalog()
                 offline_store.cache_setup_catalog(baselines, saved_setups)
-                return baselines + saved_setups
+                setups = baselines + saved_setups
             except Exception:
-                return offline_store.load_setup_catalog(
+                setups = offline_store.load_setup_catalog(
                     include_baselines=True)
+            # The shipped OTK baseline must be selectable before a team saves
+            # its own editable copy. It has a stable built-in ID, not a remote
+            # database ID, and should never be filtered out for that reason.
+            return setups
 
         def _done(setups):
             if generation != self._load_generation or not self.isVisible():
                 return
             self._set_options_busy(False)
             cur = self._setup.id if self._setup else None
-            options = [s for s in setups if s.id and s.id != cur]
+            options = _setup_copy_sources(setups, cur, source_kind)
             if not options:
                 QMessageBox.information(
-                    self, "No setups", "There are no other setups to copy from.")
+                    self,
+                    "No baselines" if source_kind == "baseline" else "No setups",
+                    ("No baseline is available yet."
+                     if source_kind == "baseline" else
+                     "There are no previous setups to copy from."))
                 return
             # Never call exec() here: this callback is delivered from an async
             # worker signal, and a nested modal event loop can deadlock before the
             # worker's thread-quit signal is processed. open() is modal but
             # non-blocking; accepted/rejected signals finish the operation.
-            dialog = _CopySetupDialog(options, self._setup_label, self)
+            dialog = _CopySetupDialog(
+                options, self._setup_label, self,
+                creation_mode=creation_mode, source_kind=source_kind)
             self._copy_dialog = dialog  # strong ref until it closes
             self._copy_dialog_generation = generation
             dialog.accepted.connect(self._copy_dialog_accepted)
@@ -2435,6 +2624,7 @@ class SetupBuilderView(QWidget):
         setup.data = data
         checks = self._maintenance.records()
         if checks:
+            setup.data[maintenance.SCOPE_KEY] = self._maintenance_scope_id
             setup.data[maintenance.CHECKS_KEY] = checks
         setup.notes = self._notes.toPlainText().strip() or None
         setup.driver_id = driver.id if driver else None

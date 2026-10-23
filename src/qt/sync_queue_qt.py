@@ -108,6 +108,7 @@ class SyncQueueDialog(QDialog):
             self._apply_event(*row, event)
         else:
             self.refresh()
+        self._update_retry_button()
 
     def set_syncing(self, syncing):
         self._syncing = bool(syncing)
@@ -126,10 +127,7 @@ class SyncQueueDialog(QDialog):
             self._items.addStretch(1)
             return
 
-        retryable = any(
-            item.error or self._events.get(item.key, {}).get("state") == "error"
-            for item in queued)
-        self._update_retry_button(retryable)
+        self._update_retry_button(True)
         self._summary.setText(
             f"{len(queued)} item{'s' if len(queued) != 1 else ''} waiting")
         for item in queued:
@@ -200,9 +198,8 @@ class SyncQueueDialog(QDialog):
 
     def _update_retry_button(self, retryable=None):
         if retryable is None:
-            retryable = any(
-                item.error
-                or self._events.get(item.key, {}).get("state") == "error"
-                for item in offline_store.pending_sync_items())
-        self._retry.setText("Syncing…" if self._syncing else "Retry Now")
-        self._retry.setEnabled(bool(retryable) and not self._syncing)
+            retryable = bool(offline_store.pending_sync_items())
+        active = self._syncing or any(
+            event.get("state") == "syncing" for event in self._events.values())
+        self._retry.setText("Syncing…" if active else "Retry Now")
+        self._retry.setEnabled(bool(retryable) and not active)

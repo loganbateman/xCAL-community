@@ -19,6 +19,7 @@ import config
 
 GITHUB_REPO = "loganbateman/xCAL-community"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+BETA_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=100"
 MAX_INSTALLER_BYTES = 250 * 1024 * 1024
 _verified_downloads: dict[Path, str] = {}
 
@@ -55,34 +56,39 @@ def _official_asset(url):
 
 
 def _best_asset(assets, version):
-    expected = f"xCAL-Setup-{version}.exe"
+    expected_names = (f"xCAL-Community-Setup-{version}.exe", f"xCAL-Setup-{version}.exe")
     for asset in assets:
-        if not isinstance(asset, dict) or asset.get("name") != expected:
+        if not isinstance(asset, dict) or asset.get("name") not in expected_names:
             continue
         url = str(asset.get("browser_download_url") or "")
         digest = _clean_sha256(str(asset.get("digest") or ""))
         if _official_asset(url) and digest:
-            return {"asset_name": expected, "download_url": url, "sha256": digest}
+            return {"asset_name": asset["name"], "download_url": url, "sha256": digest}
     return {}
 
 
 def check_for_update() -> UpdateInfo:
     current = config.APP_VERSION
+    beta = getattr(config, "UPDATE_CHANNEL", "stable") == "beta"
     try:
-        response = requests.get(LATEST_RELEASE_URL,
+        response = requests.get(BETA_RELEASES_URL if beta else LATEST_RELEASE_URL,
             headers={"Accept": "application/vnd.github+json", "User-Agent": f"xCAL/{current}"},
             timeout=8, allow_redirects=False)
         if response.status_code != 200:
             return UpdateInfo(current, message=f"GitHub release check returned HTTP {response.status_code}. No update was installed.")
         data = response.json()
+        if isinstance(data, list) and beta:
+            candidates = [item for item in data if isinstance(item, dict) and not item.get("draft")
+                          and re.fullmatch(r"v?\d+\.\d+\.\d+", str(item.get("tag_name", "")))]
+            data = max(candidates, key=lambda item: _version_tuple(_clean_version(item["tag_name"])), default={})
         if not isinstance(data, dict):
             raise ValueError("Invalid release response")
     except (requests.RequestException, ValueError):
         return UpdateInfo(current, message="Could not verify Community release information. Try again later.")
     tag = str(data.get("tag_name") or "")
     version = _clean_version(tag)
-    if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag) or data.get("draft") or data.get("prerelease"):
-        return UpdateInfo(current, message="No stable Community release was found.")
+    if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag) or data.get("draft") or (data.get("prerelease") and not beta):
+        return UpdateInfo(current, message=f"No {'beta' if beta else 'stable'} Community release was found.")
     assets = data.get("assets")
     asset = _best_asset(assets if isinstance(assets, list) else [], version)
     newer = _version_tuple(version) > _version_tuple(current)

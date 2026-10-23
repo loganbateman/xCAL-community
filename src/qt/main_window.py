@@ -40,12 +40,16 @@ class _SyncProgressBridge(QObject):
 
 
 class MainWindow(QMainWindow):
+    SAVE_SYNC_DEBOUNCE_MS = 750
+    BACKGROUND_SYNC_INTERVAL_MS = 3 * 60_000
+
     def __init__(self):
         super().__init__()
         self._closing = False
         self._restart_on_exit = False
         self._allow_close = False
         self._offline_syncing = False
+        self._connecting = False
         self._sync_events = {}
         self._sync_queue_dialog = None
         self._sync_progress_bridge = _SyncProgressBridge(self)
@@ -55,6 +59,10 @@ class MainWindow(QMainWindow):
         self._drive_connected = False
         self._catalog_cache_refreshing = False
         self._catalog_cache_last = 0.0
+        self._save_sync_timer = QTimer(self)
+        self._save_sync_timer.setSingleShot(True)
+        self._save_sync_timer.setInterval(self.SAVE_SYNC_DEBOUNCE_MS)
+        self._save_sync_timer.timeout.connect(self._run_scheduled_sync)
         self.setWindowTitle(config.APP_TITLE + (" - Offline recovery" if config.RECOVERY_MODE else ""))
         self.resize(1280, 820)
         self.setMinimumSize(640, 480)
@@ -94,7 +102,9 @@ class MainWindow(QMainWindow):
         self._setups_page.setups_changed.connect(
             self._sessions.refresh_setup_counts)
         self._setups_page.setups_changed.connect(self._compare.invalidate)
+        self._setups_page.setups_changed.connect(self._schedule_sync)
         self._parts = PartsView()
+        self._parts.catalog_changed.connect(self._schedule_sync)
         self._parts.new_baseline.connect(self._new_baseline)
         self._parts.open_baseline.connect(self._open_global_setup)
         self._parts.copy_baseline.connect(self._open_baseline_copy)
@@ -107,12 +117,17 @@ class MainWindow(QMainWindow):
         self._workspace.detail.setups_changed.connect(
             self._sessions.refresh_setup_counts)
         self._workspace.detail.setups_changed.connect(self._setup_catalog_changed)
+        self._workspace.detail.setups_changed.connect(self._schedule_sync)
         self._workspace.detail.sync_status_changed.connect(
             self._refresh_sync_indicator)
         self._setup_builder = SetupBuilderView()
+        self._parts.catalog_changed.connect(
+            lambda: self._setup_builder.invalidate_reference_data())
         self._settings.maintenance_changed.connect(lambda: self._setup_builder.refresh_maintenance(reload_context=True))
+        self._settings.maintenance_changed.connect(self._schedule_sync)
         self._setup_builder.back.connect(self._back_from_setup)
         self._setup_builder.saved.connect(self._setup_saved)
+        self._setup_builder.catalog_changed.connect(self._schedule_sync)
 
         self._pages: dict[str, QWidget] = {
             "Sessions": self._sessions,
@@ -136,7 +151,7 @@ class MainWindow(QMainWindow):
         self._refresh_offline_catalogs(force=True)
         self._load_team_naming()
         self._connection_timer = QTimer(self)
-        self._connection_timer.setInterval(60_000)
+        self._connection_timer.setInterval(self.BACKGROUND_SYNC_INTERVAL_MS)
         self._connection_timer.timeout.connect(lambda: self._connect())
         self._connection_timer.start()
         QTimer.singleShot(3500, self._check_for_updates_on_startup)
@@ -286,6 +301,7 @@ class MainWindow(QMainWindow):
             self._parts.refresh()
         self._setup_catalog_changed()
         self._refresh_sync_indicator()
+        self._schedule_sync()
 
     def _setup_catalog_changed(self):
         self._setups_page.refresh()
@@ -296,8 +312,9 @@ class MainWindow(QMainWindow):
         self._compare.preload_a(setup)
 
     def _connect(self, attempt: int = 1):
-        if self._closing or config.RECOVERY_MODE:
+        if self._closing or self._connecting or config.RECOVERY_MODE:
             return
+        self._connecting = True
 
         def _check():
             supabase_ok = db.check_connection()
@@ -312,6 +329,7 @@ class MainWindow(QMainWindow):
             return supabase_ok, drive_ok
 
         def _done(result):
+            self._connecting = False
             supabase_ok, drive_ok = result
             ok = supabase_ok and drive_ok
             self._cloud_connected = ok
@@ -372,7 +390,10 @@ class MainWindow(QMainWindow):
                 if self._stack.currentWidget() is self._workspace:
                     self._workspace.detail.refresh()
                 self._parts.refresh()
+                self._setup_builder.invalidate_reference_data()
                 self._setup_catalog_changed()
+            if offline_store.pending_sync_summary().total:
+                self._schedule_sync()
 
         def _error(_message):
             self._offline_syncing = False
@@ -390,6 +411,29 @@ class MainWindow(QMainWindow):
         run_async(
             self, work,
             on_done=_done, on_error=_error)
+
+    def _schedule_sync(self, *_args):
+        """Debounce local saves into one prompt, lightweight Drive pass."""
+        self._refresh_sync_indicator()
+        if self._closing or config.RECOVERY_MODE:
+            return
+        self._save_sync_timer.start()
+
+    def _run_scheduled_sync(self):
+        if self._closing or config.RECOVERY_MODE:
+            return
+        if self._offline_syncing:
+            # A save landed during another upload. Keep it durable and run one
+            # more pass when the current request has released the worker.
+            self._save_sync_timer.start(1_000)
+            return
+        if offline_store.pending_sync_summary().total == 0:
+            self._refresh_sync_indicator()
+            return
+        if self._cloud_connected:
+            self._sync_offline_work()
+        else:
+            self._connect()
 
     def _open_sync_queue(self):
         if self._sync_queue_dialog is None:
@@ -542,9 +586,11 @@ class MainWindow(QMainWindow):
         if (self._stack.currentWidget() is old or old.has_unsaved_changes() or old.is_saving()):
             return False
         team_setup_fields.apply(document)
+        self._parts.refresh_categories()
         replacement = SetupBuilderView()
         replacement.back.connect(self._back_from_setup)
         replacement.saved.connect(self._setup_saved)
+        replacement.catalog_changed.connect(self._schedule_sync)
         self._stack.addWidget(replacement)
         self._stack.removeWidget(old)
         old.setParent(self)

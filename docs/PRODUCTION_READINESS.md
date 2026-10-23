@@ -1,5 +1,10 @@
 # Community production-readiness plan
 
+October 23: see [0.2.1 release notes](RELEASE_0.2.1.md) for the current installer,
+beta updater and UI changes. The historical review below retains the wider
+production acceptance gates. Shipping an unsigned invited beta does not mark
+real-machine or approval gates complete.
+
 Reviewed October 19, 2026. This is a source review and release plan, not a claim
 that OAuth verification, packaging, or live multi-user validation is complete.
 Keep production work isolated from the original xCAL app and its credentials.

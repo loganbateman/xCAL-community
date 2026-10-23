@@ -68,7 +68,40 @@ class MaintenanceChecklist(QFrame):
     def refresh(self, policy, current, sessions, setups):
         self._current = current
         self._context = policy, current, sessions, setups
+        self._sheet_scope = str(
+            (current.data or {}).get(maintenance.SCOPE_KEY) or
+            (f"setup:{current.id}" if current.id else ""))
         self._state = maintenance.checklist(policy, current, sessions, setups, self._records)
+        basic_items = tuple(
+            item for item in policy["items"]
+            if item["enabled"] and item["kind"] == "check")
+
+        def sheet_row(item):
+            event = self._records.get(maintenance.record_key(
+                self._sheet_scope, current.drive_folder_id, item["id"]), {})
+            return maintenance.ChecklistRow(
+                item=item,
+                checked=bool(event.get("checked")),
+                completed_at=event.get("completed_at"),
+                actor=event.get("actor_name") or "")
+
+        # Ordinary pre-session checks belong to this setup sheet, not to a
+        # particular kart. This keeps them clickable once per setup and shared
+        # across all runs. Service intervals remain tied to the selected kart.
+        if self._sheet_scope and current.drive_folder_id and not current.is_baseline:
+            basic_rows = tuple(sheet_row(item) for item in basic_items)
+            if self._state.active:
+                interval_rows = tuple(
+                    row for row in self._state.rows
+                    if row.item.get("kind") != "check")
+                self._state = maintenance.ChecklistState(
+                    basic_rows + interval_rows, self._state.future,
+                    self._state.ordinal, self._state.kart, True,
+                    self._state.message)
+            elif not maintenance.kart_key(current):
+                self._state = maintenance.ChecklistState(
+                    basic_rows, (), 0, None, True,
+                    "Setup checklist ready. Choose a kart to track maintenance intervals.")
         self._render(policy)
 
     def _render(self, policy):
@@ -136,7 +169,9 @@ class MaintenanceChecklist(QFrame):
     def _toggle(self, item, checked):
         if not self._state.active:
             return
-        self._records = maintenance.set_checked(self._records, self._state.kart, self._current.drive_folder_id,
+        scope = (self._sheet_scope if item.get("kind") == "check"
+                 else self._state.kart)
+        self._records = maintenance.set_checked(self._records, scope, self._current.drive_folder_id,
                                                 item, checked, google_drive_client.cached_user())
         self.refresh(*self._context)
         self.changed.emit()

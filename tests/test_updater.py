@@ -36,6 +36,11 @@ def info():
                               asset_name="xCAL-Setup-9.0.0.exe", download_url=URL, sha256=DIGEST)
 
 
+@pytest.fixture(autouse=True)
+def stable_channel(monkeypatch):
+    monkeypatch.setattr("config.UPDATE_CHANNEL", "stable")
+
+
 def test_team_records_cannot_supply_update_metadata(monkeypatch):
     fetch = Mock(side_effect=AssertionError("Must never read team update manifests"))
     monkeypatch.setattr("database.client.fetch_app_doc", fetch)
@@ -48,6 +53,30 @@ def test_team_records_cannot_supply_update_metadata(monkeypatch):
     fetch.assert_not_called()
     assert get.call_args.args[0] == updater.LATEST_RELEASE_URL
     assert get.call_args.kwargs["allow_redirects"] is False
+
+
+def test_beta_channel_uses_community_installer_with_verified_digest(monkeypatch):
+    monkeypatch.setattr("config.UPDATE_CHANNEL", "beta")
+    candidate = release()
+    candidate["prerelease"] = True
+    asset = candidate["assets"][0]
+    asset["name"] = "xCAL-Community-Setup-9.0.0.exe"
+    asset["browser_download_url"] = URL.replace("xCAL-Setup", "xCAL-Community-Setup")
+    draft = {**candidate, "tag_name": "v99.0.0", "draft": True}
+    get = Mock(return_value=response([draft, candidate]))
+    monkeypatch.setattr(updater.requests, "get", get)
+    result = updater.check_for_update()
+    assert result.update_available
+    assert result.asset_name == "xCAL-Community-Setup-9.0.0.exe"
+    assert result.sha256 == DIGEST
+    assert get.call_args.args[0] == updater.BETA_RELEASES_URL
+
+
+def test_stable_channel_rejects_prerelease(monkeypatch):
+    candidate = release()
+    candidate["prerelease"] = True
+    monkeypatch.setattr(updater.requests, "get", Mock(return_value=response(candidate)))
+    assert not updater.check_for_update().update_available
 
 
 @pytest.mark.parametrize("payload", [release(digest=""), release(url="https://attacker.invalid/app.exe")])

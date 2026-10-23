@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QComboBox, QPushButton, QScrollArea,
                                QFrame, QProgressBar, QSizePolicy, QMessageBox,
@@ -262,6 +262,10 @@ class SessionsView(QWidget):
         self._counts_refreshing = False
         self._counts_refresh_pending = False
         self._counts_generation = 0
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._render)
         self._build()
 
     def _build(self):
@@ -308,7 +312,7 @@ class SessionsView(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search sessions, drivers, tracks\u2026")
         self._search.setMinimumWidth(160)
-        self._search.textChanged.connect(self._render)
+        self._search.textChanged.connect(self._schedule_filter)
         bar.addWidget(self._search)
         self._season = make_combo_searchable(QComboBox())
         self._season.addItem("All seasons")
@@ -339,6 +343,10 @@ class SessionsView(QWidget):
         self._list_lay.addStretch(1)
         self._scroll.setWidget(self._list)
         root.addWidget(self._scroll, 1)
+
+    def _schedule_filter(self, *_args):
+        """Coalesce rapid keystrokes so large session lists rebuild once."""
+        self._filter_timer.start()
 
     # ── Data ────────────────────────────────────────────────────────────────
 
@@ -713,6 +721,7 @@ class SessionsView(QWidget):
 
         self._list_lay.addStretch(1)
         self.setUpdatesEnabled(True)
+        self.update()
 
     # Called by the main window when this page becomes visible the first time.
     def on_show(self):

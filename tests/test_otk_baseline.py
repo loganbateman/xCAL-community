@@ -25,6 +25,7 @@ def test_otk_dry_template_maps_only_documented_values():
     assert draft.data["front_ride_height"] == "MID (middle height)"
     assert draft.data["ackerman"] == "BOTTOM HOLE"
     assert draft.data["axle"] == "N 1030 mm"
+    assert draft.data["cage_spring_preload"] == "1-2"
     assert draft.data["front_track_spacers"] == "1 large spacer (15mm)"
     assert draft.data["rear_track"] == "54 3/4 - 55 1/8"
     assert draft.data["rim_type"] == "OTK MXJ"
@@ -47,6 +48,21 @@ def test_each_team_gets_draft_until_its_copy_exists():
     owned = otk_baseline.editable_copy(rows[0])
     owned.id = "team-baseline"
     assert otk_baseline.add_when_team_has_no_copy([owned]) == [owned]
+
+
+def test_new_preload_default_preserves_existing_team_values():
+    import setup_fields as sf
+    rear = [field.key for field in sf.REAR_FIELDS]
+    assert rear.index("cage_spring_preload") == rear.index("cage") + 1
+    owned = otk_baseline.editable_copy()
+    owned.id = "team-baseline"
+    del owned.data["cage_spring_preload"]
+    presented = otk_baseline.add_when_team_has_no_copy([owned])[0]
+    assert presented.data["cage_spring_preload"] == "1-2"
+    assert "cage_spring_preload" not in owned.data
+    for value in ("", "3"):
+        owned.data["cage_spring_preload"] = value
+        assert otk_baseline.add_when_team_has_no_copy([owned])[0].data["cage_spring_preload"] == value
 
 
 def test_parts_opens_builtin_as_editable_team_copy():

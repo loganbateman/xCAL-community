@@ -167,16 +167,17 @@ def test_settings_dialog_edits_selected_field_and_adds_parts_picker():
     document = fields.add_parameter(None, "front", "Original")
     key = document["fields"][0]["key"]
     dialog = TeamSetupFieldsDialog(document)
-    dialog._list.setCurrentRow(0)
+    dialog._select_key(key)
     dialog._label.setText("Updated")
-    dialog._section.setCurrentIndex(dialog._section.findData("rear"))
-    dialog._update.click()
+    assert dialog._commit_editor()
     assert dialog.document["fields"][0]["key"] == key
     assert dialog.document["fields"][0]["label"] == "Updated"
+    dialog._section.setCurrentIndex(dialog._section.findData("rear"))
+    dialog._new_field.click()
     dialog._label.setText("Rear consumable")
     dialog._kind.setCurrentIndex(dialog._kind.findData("part"))
     dialog._category.setCurrentText("General Consumables")
-    dialog._add()
+    assert dialog._commit_editor()
     assert len(dialog.document["fields"]) == 2
     assert dialog.document["fields"][1]["category"] == "General Consumables"
     dialog.deleteLater()

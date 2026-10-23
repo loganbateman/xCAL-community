@@ -16,7 +16,7 @@ from inventory_fields import (
 
 class InventoryModelTests(unittest.TestCase):
     def test_requested_categories_are_seeded_in_display_order(self):
-        self.assertEqual(CATEGORIES, (
+        self.assertEqual(tuple(CATEGORIES), (
             "Tires", "Engines", "Carbs", "Axles", "Karts", "Drivers",
             "Tracks", "Rear Hubs", "Front Hubs", "Rims", "Front Torsion Bar",
             "Fuel", "Cage", "Clutches", "Exhausts", "Front Spacers",

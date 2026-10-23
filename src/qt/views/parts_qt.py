@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from math import isfinite
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -305,7 +305,12 @@ class PartDialog(QDialog):
                 self._category.findData(selected_category))
         else:
             self._category.setCurrentIndex(-1)
-        self._form.addRow("Category", self._category)
+        category_row = QHBoxLayout()
+        category_row.addWidget(self._category, 1)
+        self._new_type_button = QPushButton("+ New part type")
+        self._new_type_button.clicked.connect(self._new_part_type)
+        category_row.addWidget(self._new_type_button)
+        self._form.addRow("Part type", category_row)
 
         for label, key in (
             ("Name *", "name"),
@@ -408,6 +413,46 @@ class PartDialog(QDialog):
     def _selected_category(self) -> str:
         category = self._category.currentData()
         return category if category in CATEGORIES else ""
+
+    def _new_part_type(self):
+        from qt.views.part_type_qt import PartTypeDialog
+        from utils import team_setup_fields
+        document = team_setup_fields.load()
+        dialog = PartTypeDialog(document, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._new_type_button.setEnabled(False)
+
+        def save():
+            # Merge into the most recent local team definitions, preserving
+            # parameter edits made while the part form was open.
+            part_type = dialog.document["part_types"][-1]
+            document = team_setup_fields.add_part_type(
+                team_setup_fields.load(), part_type["name"], part_type["fields"])
+            team_setup_fields.save(document)
+            return document
+
+        def done(document):
+            from inventory_fields import apply_part_types
+            apply_part_types(document.get("part_types", []))
+            self._category.addItem(dialog.type_name, dialog.type_name)
+            self._category.setCurrentIndex(self._category.findData(dialog.type_name))
+            self._new_type_button.setEnabled(True)
+            window = self.window()
+            # This dialog may be embedded in the setup picker; the new type
+            # itself is already durable and can be used immediately.
+            while window.parentWidget():
+                window = window.parentWidget()
+            if hasattr(window, "_parts"):
+                window._parts.refresh_categories()
+            if hasattr(window, "_schedule_sync"):
+                window._schedule_sync()
+
+        def failed(message):
+            self._new_type_button.setEnabled(True)
+            QMessageBox.warning(self, "Part type not saved", str(message))
+
+        run_async(self, save, on_done=done, on_error=failed)
 
     def _category_selected(self, _index):
         category = self._selected_category()
@@ -1392,6 +1437,7 @@ class PartsView(QWidget):
     new_baseline = Signal()
     open_baseline = Signal(object)
     copy_baseline = Signal(object)
+    catalog_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1401,6 +1447,10 @@ class PartsView(QWidget):
         self._load_generation = 0
         self._refresh_pending = False
         self._items: list[InventoryItem] = []
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._render)
         self._build()
 
     def _build(self):
@@ -1448,7 +1498,7 @@ class PartsView(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText(
             "Search name, manufacturer, model, part number\u2026")
-        self._search.textChanged.connect(self._render)
+        self._search.textChanged.connect(lambda _text: self._filter_timer.start())
         filters.addWidget(self._search, 1)
         self._status_filter = ScrollSafeComboBox()
         self._status_filter.addItem("All statuses", None)
@@ -1529,6 +1579,16 @@ class PartsView(QWidget):
     def current_category(self) -> str:
         category = self._category_filter.currentData()
         return category if category in PARTS_CATEGORIES else ALL_PARTS_CATEGORY
+
+    def refresh_categories(self):
+        current = self.current_category()
+        self._category_filter.blockSignals(True)
+        self._category_filter.clear()
+        self._category_filter.addItem(ALL_PARTS_CATEGORY, ALL_PARTS_CATEGORY)
+        for category in PARTS_CATEGORIES:
+            self._category_filter.addItem(category, category)
+        self._category_filter.setCurrentIndex(self._category_filter.findData(current))
+        self._category_filter.blockSignals(False)
 
     def refresh(self, *_args):
         self._load_generation += 1
@@ -1801,7 +1861,9 @@ class PartsView(QWidget):
                 otk_baseline.editable_copy(item)
                 if otk_baseline.is_builtin(item) else item)
             return
-        PartMetadataDialog(item, self).exec()
+        dialog = PartMetadataDialog(item, self)
+        dialog.part_saved.connect(lambda _part: self.catalog_changed.emit())
+        dialog.exec()
         self.refresh()
 
     def _copy_selected(self):
@@ -1887,6 +1949,7 @@ class PartsView(QWidget):
                 self._upsert(result)
             else:
                 self.refresh()
+            self.catalog_changed.emit()
             self._run_pending_refresh()
 
         def _error(message):

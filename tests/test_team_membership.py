@@ -19,20 +19,33 @@ def profile():
     return {"schema": 1, "id": "team-id", "folder_id": "test-folder", "name": "Test team"}
 
 
-def test_invite_contains_no_tokens_and_round_trips():
-    code = team.encode_invite(profile())
-    decoded = team.decode_invite(code)
-    assert decoded == {"schema": 1, "team_id": "team-id", "folder_id": "test-folder", "team_name": "Test team"}
-    assert "email" not in decoded and "token" not in decoded
+def test_verified_team_profiles_are_cached_per_google_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(team, "TEAM_CACHE_PATH", tmp_path / "team_accounts.json")
+    entry = {"profile": profile(),
+             "folder": {"id": "test-folder", "name": "Team Drive"},
+             "account": "owner@example.test", "verified": True}
+    team.remember_teams("OWNER@example.test", [entry])
+    cached = team.cached_teams("owner@example.test")
+    assert cached[0]["profile"] == profile()
+    assert cached[0]["folder"]["name"] == "Team Drive"
+    assert cached[0]["verified"] is False
+    assert team.cached_teams("other@example.test") == []
 
 
-@pytest.mark.parametrize("code", ["bad", "xcal-team-v1:%%%%", "xcal-team-v1:" + "a" * 3000])
-def test_invalid_invite_rejected_before_google_calls(code, monkeypatch):
-    read = Mock()
-    monkeypatch.setattr(team.drive, "folder_details", read)
-    with pytest.raises(ValueError):
-        team.validate_join(code)
-    read.assert_not_called()
+def test_cached_team_requires_live_editor_access(monkeypatch):
+    entry = {"profile": profile(),
+             "folder": {"id": "test-folder", "name": "Team Drive"},
+             "account": "owner@example.test", "verified": False}
+    monkeypatch.setattr(team.drive, "folder_details", lambda _folder: {
+        "id": "test-folder", "name": "Team Drive",
+        "capabilities": {"canAddChildren": True}})
+    service = Mock()
+    service.files.return_value.list.return_value.execute.return_value = {
+        "files": [{"id": "journal"}]}
+    monkeypatch.setattr(team.drive, "_worker_service", lambda: service)
+    verified = team.validate_team_shortcut(entry)
+    assert verified["verified"] is True
+    assert verified["folder"]["id"] == "test-folder"
 
 
 def test_existing_editor_who_is_not_owner_cannot_invite(owner, monkeypatch):
@@ -60,7 +73,7 @@ def test_owner_invite_grants_named_account_writer_access_only(owner, monkeypatch
     service.permissions.return_value.create.assert_called_once_with(
         fileId="test-folder", body={"type": "user", "role": "writer", "emailAddress": "new@example.test"},
         sendNotificationEmail=True, supportsAllDrives=True, fields="id")
-    assert team.decode_invite(invitation["code"])["folder_id"] == "test-folder"
+    assert invitation == {"email": "new@example.test", "team": "Test team"}
 
 
 def test_repeated_invite_does_not_create_duplicate_permissions(owner, monkeypatch):
@@ -72,21 +85,6 @@ def test_repeated_invite_does_not_create_duplicate_permissions(owner, monkeypatc
     team.invite_member("member@example.test")
     service.permissions.return_value.create.assert_not_called()
     service.permissions.return_value.update.assert_not_called()
-
-
-def test_viewer_join_is_rejected_in_editor_beta(owner, monkeypatch):
-    monkeypatch.setattr(team.drive, "folder_details", lambda _id: {"id": "test-folder", "capabilities": {"canAddChildren": False}})
-    with pytest.raises(PermissionError, match="Editor"):
-        team.validate_join(team.encode_invite(profile()))
-
-
-def test_forwarded_code_does_not_grant_google_permission(owner, monkeypatch):
-    monkeypatch.setattr(team.drive, "folder_details", Mock(side_effect=PermissionError("No Drive access")))
-    service = Mock()
-    monkeypatch.setattr(team.drive, "_worker_service", lambda: service)
-    with pytest.raises(PermissionError, match="No Drive access"):
-        team.validate_join(team.encode_invite(profile()))
-    service.permissions.assert_not_called()
 
 
 def test_owner_creates_one_profile_only(owner, monkeypatch):
@@ -130,10 +128,14 @@ def test_permission_pagination_does_not_duplicate_existing_member(owner, monkeyp
     service.permissions.return_value.create.assert_not_called()
 
 
-def test_separate_account_joins_existing_team_without_writes(owner, monkeypatch):
+def test_signed_in_editor_discovers_existing_team_without_writes(owner, monkeypatch):
     from database.drive_store import DriveStore
     from utils.google_drive_client import GoogleUser
     monkeypatch.setattr(team.drive, "current_user", lambda **kwargs: GoogleUser("Friend", "friend@example.test"))
+    service = Mock()
+    service.files.return_value.list.return_value.execute.return_value = {
+        "files": [{"id": "journal", "parents": ["test-folder"]}]}
+    monkeypatch.setattr(team.drive, "_worker_service", lambda: service)
     journal = Mock()
     journal.read_unknown.return_value = []
     def populated_store(path, transport):
@@ -145,20 +147,24 @@ def test_separate_account_joins_existing_team_without_writes(owner, monkeypatch)
         return store
     monkeypatch.setattr(team, "DriveStore", populated_store)
     monkeypatch.setattr(team, "DriveJournal", lambda folder: journal)
-    result = team.validate_join(team.encode_invite(profile()))
-    assert result["account"] == "friend@example.test"
-    assert result["profile"]["id"] == "team-id"
+    result = team.discover_accessible_teams()
+    assert result[0]["account"] == "friend@example.test"
+    assert result[0]["profile"]["id"] == "team-id"
     journal.append.assert_not_called()
 
 
-def test_wrong_team_code_is_rejected_even_with_drive_editor_access(owner, monkeypatch):
+def test_discovery_ignores_team_profile_for_a_different_folder(owner, monkeypatch):
+    service = Mock()
+    service.files.return_value.list.return_value.execute.return_value = {
+        "files": [{"id": "journal", "parents": ["test-folder"]}]}
+    monkeypatch.setattr(team.drive, "_worker_service", lambda: service)
     store = Mock()
     store.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
         {"data": dict(profile(), id="different-team")}]
+    store.table.return_value.select.return_value.eq.return_value.execute.return_value.data[0]["data"]["folder_id"] = "other-folder"
     monkeypatch.setattr(team, "DriveStore", lambda *args: store)
     monkeypatch.setattr(team, "DriveJournal", Mock())
-    with pytest.raises(ValueError, match="does not match"):
-        team.validate_join(team.encode_invite(profile()))
+    assert team.discover_accessible_teams() == []
 
 
 def test_access_list_is_read_only_paginated_and_excludes_deleted_expired(monkeypatch):

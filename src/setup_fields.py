@@ -10,7 +10,7 @@ Values persist in a JSONB `data` bag keyed by Field.key, so adding a field is a
 one-line change with no database migration.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,7 @@ FRONT_FIELDS = [
 REAR_FIELDS = [
     Field("axle", "Axle", "", "text"),
     Field("cage", "Cage", "", "text"),
+    Field("cage_spring_preload", "Cage Spring Preload", "turns", "text"),
     Field("rear_ride_height", "Rear Ride Height", "", "text"),
 ]
 
@@ -210,6 +211,13 @@ BUILTIN_INVENTORY_FIELD_CATEGORIES = dict(INVENTORY_FIELD_CATEGORIES)
 CUSTOM_FIELD_DEFINITIONS = {"schema": 1, "fields": []}
 
 
+def display_field(field, document=None):
+    """Team captions never change an original field's identity or value type."""
+    document = CUSTOM_FIELD_DEFINITIONS if document is None else document
+    override = document.get("builtin_overrides", {}).get(field.key, {})
+    return replace(field, label=override.get("label", field.label), unit=override.get("unit", field.unit))
+
+
 def custom_fields(section=None):
     return [Field(item["key"], item["label"], item["unit"], item["kind"])
             for item in CUSTOM_FIELD_DEFINITIONS["fields"]
@@ -219,7 +227,13 @@ def custom_fields(section=None):
 def section_fields(section):
     builtin = {"front": FRONT_FIELDS, "rear": REAR_FIELDS,
                "engine": ENGINE_FIELDS, "tires": TIRE_FIELDS}.get(section, [])
-    return list(builtin) + custom_fields(section)
+    return ordered_fields(section, list(builtin) + custom_fields(section))
+
+
+def ordered_fields(section, items, document=None):
+    document = CUSTOM_FIELD_DEFINITIONS if document is None else document
+    positions = {key: index for index, key in enumerate(document.get("field_order", {}).get(section, []))}
+    return sorted(items, key=lambda item: positions.get(item.key, len(positions)))
 
 
 def all_value_fields() -> list[Field]:

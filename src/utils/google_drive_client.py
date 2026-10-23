@@ -114,6 +114,14 @@ def _load_credentials() -> Credentials | None:
         raise GoogleDriveError(f"Could not read Google sign-in token: {exc}") from exc
 
 
+def has_saved_credentials() -> bool:
+    """Whether this device has a readable login that can continue offline-first."""
+    try:
+        return _load_credentials() is not None
+    except GoogleDriveError:
+        return False
+
+
 def _save_credentials(credentials: Credentials) -> None:
     try:
         TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)

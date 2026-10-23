@@ -23,10 +23,10 @@ def test_invalid_json_shape_cannot_start_google_authorization(tmp_path, monkeypa
     authorize = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
     monkeypatch.setattr("utils.google_drive_client.authorize", authorize)
+    monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, [])))
     settings = SettingsView()
     settings._show_team_profile(None)
     settings._drive_folder.setText("new-team")
-    settings._oauth_file.setText(str(client_file(tmp_path, [])))
     settings._save_drive_connection()
     assert warning.call_count == 1
     authorize.assert_not_called()
@@ -37,10 +37,10 @@ def test_service_account_key_is_rejected(tmp_path, monkeypatch):
     app()
     warning = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
+    monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, {"type": "service_account"})))
     settings = SettingsView()
     settings._show_team_profile(None)
     settings._drive_folder.setText("new-team")
-    settings._oauth_file.setText(str(client_file(tmp_path, {"type": "service_account"})))
     settings._save_drive_connection()
     assert "Desktop" in warning.call_args.args[2]
     settings.deleteLater()
@@ -50,12 +50,12 @@ def test_oauth_endpoints_must_be_google_not_arbitrary_server(tmp_path, monkeypat
     app()
     warning = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
+    monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, {"installed": {
+        "client_id": "test-client", "client_secret": "synthetic-placeholder",
+        "auth_uri": "https://example.invalid/auth", "token_uri": "https://example.invalid/token"}})))
     settings = SettingsView()
     settings._show_team_profile(None)
     settings._drive_folder.setText("new-team")
-    settings._oauth_file.setText(str(client_file(tmp_path, {"installed": {
-        "client_id": "test-client", "client_secret": "synthetic-placeholder",
-        "auth_uri": "https://example.invalid/auth", "token_uri": "https://example.invalid/token"}})))
     settings._save_drive_connection()
     assert "official" in warning.call_args.args[2]
     settings.deleteLater()
@@ -67,15 +67,15 @@ def test_cancelled_connection_does_not_change_config_or_authorize(tmp_path, monk
     monkeypatch.setattr("utils.google_drive_client.authorize", authorize)
     monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.No)
     monkeypatch.setattr(config, "GOOGLE_DRIVE_FOLDER_ID", "")
-    original = config.GOOGLE_OAUTH_CLIENT_FILE
-    settings = SettingsView()
-    settings._drive_folder.setText("new-team")
-    settings._oauth_file.setText(str(client_file(tmp_path, {"installed": {
+    client = client_file(tmp_path, {"installed": {
         "client_id": "test-client", "client_secret": "synthetic-placeholder",
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token"}})))
+        "token_uri": "https://oauth2.googleapis.com/token"}})
+    monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client))
+    settings = SettingsView()
+    settings._drive_folder.setText("new-team")
     settings._save_drive_connection()
-    assert config.GOOGLE_OAUTH_CLIENT_FILE == original
+    assert config.GOOGLE_OAUTH_CLIENT_FILE == str(client)
     authorize.assert_not_called()
     settings.deleteLater()
 
@@ -88,12 +88,12 @@ def test_switching_team_with_pending_edits_is_blocked(tmp_path, monkeypatch):
     monkeypatch.setattr("utils.google_drive_client.authorize", authorize)
     monkeypatch.setattr(config, "GOOGLE_DRIVE_FOLDER_ID", "current-team")
     monkeypatch.setattr("qt.views.settings_qt.db.get_client", lambda: type("Pending", (), {"pending_count": lambda self: 1})())
-    settings = SettingsView()
-    settings._drive_folder.setText("different-team")
-    settings._oauth_file.setText(str(client_file(tmp_path, {"installed": {
+    monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, {"installed": {
         "client_id": "test-client", "client_secret": "synthetic-placeholder",
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
         "token_uri": "https://oauth2.googleapis.com/token"}})))
+    settings = SettingsView()
+    settings._drive_folder.setText("different-team")
     settings._save_drive_connection()
     assert "pending" in warning.call_args.args[2]
     authorize.assert_not_called()
@@ -105,7 +105,10 @@ def test_failed_settings_commit_keeps_old_client_and_configuration(tmp_path, mon
     monkeypatch.setattr("database.client.fetch_app_doc", Mock(return_value=None))
     monkeypatch.setattr(config, "GOOGLE_DRIVE_FOLDER_ID", "")
     monkeypatch.setattr(config, "USER_DATA_DIR", tmp_path)
-    old = client_file(tmp_path, {"installed": {"client_id": "old-synthetic-client"}})
+    old = client_file(tmp_path, {"installed": {
+        "client_id": "community-synthetic-client", "client_secret": "synthetic",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token"}})
     original_bytes = old.read_bytes()
     monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(old))
     env = tmp_path / "settings.env"
@@ -121,10 +124,6 @@ def test_failed_settings_commit_keeps_old_client_and_configuration(tmp_path, mon
     monkeypatch.setattr("qt.views.settings_qt.run_async", immediate)
     settings = SettingsView()
     settings._drive_folder.setText("new-team")
-    client = tmp_path / "new-client.json"
-    client.write_text(json.dumps({"installed": {"client_id": "new-synthetic-client", "client_secret": "synthetic",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token"}}))
-    settings._oauth_file.setText(str(client))
     restart = Mock()
     settings.restart = restart
     settings._save_drive_connection()

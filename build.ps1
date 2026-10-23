@@ -1,14 +1,20 @@
 param(
     [switch]$SkipChecks,
     [string]$OAuthClient,
-    [switch]$Package
+    [switch]$Package,
+    [switch]$Installer
 )
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     $communityPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $communityPython)) { throw 'Create the Community .venv first.' }
-    if ($Package -and -not $OAuthClient) { throw 'A beta package requires the Community Desktop OAuth client.' }
+    if (($Package -or $Installer) -and -not $OAuthClient) {
+        throw 'A beta package or installer requires the Community Desktop OAuth client.'
+    }
+    $versionLine = Select-String -LiteralPath 'src\config.py' -Pattern 'APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+    $version = if ($versionLine) { $versionLine.Matches[0].Groups[1].Value } else { '0.0.0' }
+    Write-Host "Building xCAL Community $version"
     if (-not $SkipChecks) {
         & $communityPython scripts/check_publication.py
         if ($LASTEXITCODE -ne 0) { throw 'Publication safety check failed.' }
@@ -43,6 +49,27 @@ try {
     if ($Package) {
         & $communityPython scripts/package_beta.py
         if ($LASTEXITCODE -ne 0) { throw 'Beta archive packaging failed.' }
+    }
+    if ($Installer) {
+        $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+        if ($iscc) {
+            $iscc = $iscc.Source
+        } else {
+            $iscc = @(
+                (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+                (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+                (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+            ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        }
+        if (-not $iscc) { throw 'Inno Setup 6 is required to build the Windows installer.' }
+        & $iscc "/DMyAppVersion=$version" 'installer\xCAL-community.iss'
+        if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installer build failed.' }
+        $installerPath = Join-Path $PSScriptRoot "installer\Output\xCAL-Community-Setup-$version.exe"
+        if (-not (Test-Path -LiteralPath $installerPath)) { throw 'Installer was not produced.' }
+        $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
+        [IO.File]::WriteAllText("$installerPath.sha256", "$digest  $([IO.Path]::GetFileName($installerPath))`n")
+        Write-Host "Community installer: $installerPath"
+        Write-Host "SHA-256: $digest"
     }
     if ($OAuthClient) {
         Write-Host 'Community Desktop OAuth client injected; user tokens remain outside the install.'

@@ -3,22 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import re
-import sys
+import time
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QUrl, Signal, QSize
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                                QLabel, QPushButton, QFrame, QScrollArea,
                                QMessageBox, QLineEdit, QFileDialog, QDialog,
                                QListWidget, QPlainTextEdit, QTabWidget, QComboBox,
-                               QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
+                               QTableWidget, QTableWidgetItem, QHeaderView,
+                               QAbstractItemView)
 
 import config
 import offline_store
 import database.client as db
 import packets
 from utils import google_drive_client, updater
-from utils.atomic_files import atomic_write_text, update_settings
+from utils.atomic_files import update_settings
 from utils import workspace_backup
 from qt.workers import run_async, check_interruption
 
@@ -34,11 +35,17 @@ class SettingsView(QWidget):
         self._on_setup_fields_changed = on_setup_fields_changed
         self._maintenance_loading = False
         self._maintenance_dialog = None
+        self._connection_checking = False
+        self._connection_checked_at = 0.0
         self._pending_team_name = None
         self._team_profile = None
         self._members_folder = None
         self._members_generation = 0
         self._members_loading = False
+        self._member_write_busy = False
+        self._member_entries = []
+        self._member_authority = None
+        self._members_loaded_at = 0.0
         self._sharing_allowed = False
         self._invite_busy = False
         self._build()
@@ -70,7 +77,7 @@ class SettingsView(QWidget):
         self._settings_tabs.setObjectName("SettingsTabs")
         connection_lay.addWidget(self._settings_tabs, 1)
         sections = []
-        for name in ("Account && Drive", "Team", "Workspace", "Advanced", "Maintenance"):
+        for name in ("Account", "Team", "Workspace"):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -82,13 +89,18 @@ class SettingsView(QWidget):
             scroll.setWidget(body)
             self._settings_tabs.addTab(scroll, name)
             sections.append(column)
-        col, team_col, workspace_col, self._advanced_layout, maintenance_col = sections
+        col, team_col, workspace_col = sections
         drive_card = self._build_drive_setup_card()
         team_col.addWidget(self._build_team_card())
-        parameters = QPushButton("Edit setup fields & Parts pickers")
+        parameters = QPushButton("Edit fields && part types")
         parameters.clicked.connect(self._edit_team_parameters)
         workspace_col.addWidget(self._action_card(
-            "Setup customization", "Add, edit or hide tuning inputs and Parts pickers by section.", parameters))
+            "Fields", "Setup sections, tuning parameters and part types.", parameters))
+
+        self._maintenance_button = QPushButton("Edit checklist && intervals")
+        self._maintenance_button.clicked.connect(self._edit_maintenance)
+        workspace_col.addWidget(self._action_card(
+            "Maintenance", "Pre-session checks and service intervals.", self._maintenance_button))
 
         # Cloud services card
         card = QFrame()
@@ -128,13 +140,18 @@ class SettingsView(QWidget):
 
         btns = QHBoxLayout()
         signin = QPushButton("Sign in with Google")
+        self._signin = signin
         signin.setObjectName("Primary")
         signin.clicked.connect(self._sign_in)
         signin.setEnabled(Path(config.GOOGLE_OAUTH_CLIENT_FILE).is_file())
+        self._signout = QPushButton("Sign out of Google")
+        self._signout.setObjectName("Ghost")
+        self._signout.clicked.connect(self._sign_out)
+        self._signout.setEnabled(False)
         test = QPushButton("Test connection")
         test.setObjectName("Ghost")
-        test.clicked.connect(self._verify_connection)
-        for b in (signin, test):
+        test.clicked.connect(lambda _checked=False: self._verify_connection(force=True))
+        for b in (signin, self._signout, test):
             b.setCursor(Qt.PointingHandCursor)
             btns.addWidget(b)
         btns.addStretch(1)
@@ -142,29 +159,29 @@ class SettingsView(QWidget):
         col.addWidget(card)
         col.addWidget(drive_card)
 
-        workspace_col.addWidget(self._build_packets_card())
         export = QPushButton("Export backup")
         export.clicked.connect(self._export_workspace)
-        workspace_col.addWidget(self._action_card(
-            "Workspace backup", "Save a private copy of this workspace to your computer.", export))
         restore = QPushButton("Restore backup")
         restore.clicked.connect(self._restore_workspace)
+        backup_actions = QWidget()
+        backup_row = QHBoxLayout(backup_actions)
+        backup_row.setContentsMargins(0, 0, 0, 0)
+        backup_row.addWidget(export)
+        backup_row.addWidget(restore)
         workspace_col.addWidget(self._action_card(
-            "Recover a workspace", "Restore a backup into a separate offline copy. Your current workspace is kept.", restore))
+            "Backups", "Export a private copy or restore into a separate offline workspace.", backup_actions))
         workspace_col.addWidget(self._build_updates_card())
-        review_baselines = QPushButton("Review duplicate baselines...")
+        review_baselines = QPushButton("Review baselines")
         review_baselines.clicked.connect(self._review_duplicate_baselines)
-        workspace_col.addWidget(review_baselines, 0, Qt.AlignLeft)
-        conflicts = QPushButton("Review shared-edit conflicts")
+        conflicts = QPushButton("Review conflicts")
         conflicts.clicked.connect(self._review_conflicts)
+        review_actions = QWidget()
+        review_row = QHBoxLayout(review_actions)
+        review_row.setContentsMargins(0, 0, 0, 0)
+        review_row.addWidget(conflicts)
+        review_row.addWidget(review_baselines)
         workspace_col.addWidget(self._action_card(
-            "Shared edits", "Review and resolve changes that need your attention.", conflicts))
-
-        self._maintenance_button = QPushButton("Edit maintenance schedule")
-        self._maintenance_button.clicked.connect(self._edit_maintenance)
-        maintenance_col.addWidget(self._action_card(
-            "Checklists & maintenance", "Set default, practice, qualifying, and race intervals for your checklist items.",
-            self._maintenance_button))
+            "Review", "Resolve shared-edit conflicts and duplicate baselines.", review_actions))
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
@@ -172,13 +189,13 @@ class SettingsView(QWidget):
         connection_lay.addWidget(self._status)
         for column in sections:
             column.addStretch(1)
-        if getattr(sys, "frozen", False):
-            self._settings_tabs.setTabVisible(3, False)
 
         for button in self.findChildren(QPushButton):
             button.setCursor(Qt.PointingHandCursor)
             if not button.objectName():
                 button.setObjectName("Secondary")
+                button.style().unpolish(button)
+                button.style().polish(button)
 
         outer.addWidget(connection, 1)
         self._settings_tabs.currentChanged.connect(self._settings_tab_changed)
@@ -222,6 +239,8 @@ class SettingsView(QWidget):
         layout.setSpacing(10)
         heading = QLabel(title)
         heading.setObjectName("H2")
+        heading.setStyleSheet(
+            f"border-left: 3px solid {config.COLOR_ACCENT}; padding-left: 10px; font-weight: 700;")
         layout.addWidget(heading)
         hint = QLabel(description)
         hint.setObjectName("Muted")
@@ -252,26 +271,6 @@ class SettingsView(QWidget):
         self._pick_drive.clicked.connect(self._pick_drive_folder)
         self._pick_drive.setEnabled(client_ready)
         layout.addWidget(self._pick_drive, 0, Qt.AlignLeft)
-        advanced = QFrame()
-        advanced.setObjectName("Card")
-        advanced_layout = QVBoxLayout(advanced)
-        advanced_layout.setContentsMargins(20, 18, 20, 18)
-        advanced_layout.setSpacing(12)
-        heading = QLabel("Developer configuration")
-        heading.setObjectName("H2")
-        advanced_layout.addWidget(heading)
-        note = QLabel("Community Google client configured." if client_ready else
-                      "Google sign-in needs a community OAuth client. Configure it here for local testing.")
-        note.setWordWrap(True)
-        note.setObjectName("Muted")
-        advanced_layout.addWidget(note)
-        self._oauth_file = QLineEdit(config.GOOGLE_OAUTH_CLIENT_FILE)
-        self._oauth_file.setPlaceholderText("Google Desktop OAuth client JSON")
-        advanced_layout.addWidget(self._oauth_file)
-        choose = QPushButton("Choose OAuth client JSON")
-        choose.clicked.connect(self._choose_oauth_client)
-        advanced_layout.addWidget(choose, 0, Qt.AlignLeft)
-        self._advanced_layout.addWidget(advanced)
         self._connect_drive = QPushButton("Save connection")
         self._connect_drive.setObjectName("Primary")
         self._connect_drive.clicked.connect(self._save_drive_connection)
@@ -279,7 +278,7 @@ class SettingsView(QWidget):
         help_button = QPushButton("Setup guide")
         help_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
             "https://github.com/loganbateman/xCAL-community/blob/main/docs/GOOGLE_DRIVE_SETUP.md")))
-        advanced_layout.addWidget(help_button, 0, Qt.AlignLeft)
+        layout.addWidget(help_button, 0, Qt.AlignLeft)
         return card
 
     def _pick_drive_folder(self):
@@ -320,6 +319,9 @@ class SettingsView(QWidget):
         self._leave_team_button.setObjectName("Danger")
         self._leave_team_button.clicked.connect(self._leave_team)
         root.addWidget(self._leave_team_button, 0, Qt.AlignLeft)
+        self._switch_team_button = QPushButton("Switch team")
+        self._switch_team_button.clicked.connect(self._switch_team)
+        root.addWidget(self._switch_team_button, 0, Qt.AlignLeft)
         self._members_panel = QWidget()
         self._members_panel.setObjectName("TeamMembersPanel")
         self._members_panel.setStyleSheet("QWidget#TeamMembersPanel { background: transparent; }")
@@ -331,14 +333,15 @@ class SettingsView(QWidget):
         members_header.addWidget(members_title, 1)
         self._members_refresh = QPushButton("Refresh")
         self._members_refresh.setObjectName("Ghost")
-        self._members_refresh.clicked.connect(self._refresh_team_members)
+        self._members_refresh.clicked.connect(lambda _checked=False: self._refresh_team_members(force=True))
         members_header.addWidget(self._members_refresh)
-        self._manage_sharing = QPushButton("Manage sharing...")
+        self._manage_sharing = QPushButton("Advanced sharing...")
         self._manage_sharing.clicked.connect(self._open_sharing_management)
         members_header.addWidget(self._manage_sharing)
         members_layout.addLayout(members_header)
         self._members_table = QTableWidget(0, 4)
-        self._members_table.setHorizontalHeaderLabels(["Name", "Google email", "Role", "Access"])
+        self._members_table.setHorizontalHeaderLabels(["Name", "Google email", "Role", ""])
+        self._members_table.verticalHeader().setDefaultSectionSize(54)
         self._members_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._members_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._members_table.setAlternatingRowColors(True)
@@ -346,7 +349,8 @@ class SettingsView(QWidget):
         self._members_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._members_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self._members_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self._members_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._members_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self._members_table.setColumnWidth(3, 56)
         self._members_table.setMinimumHeight(140)
         self._members_table.setMaximumHeight(300)
         members_layout.addWidget(self._members_table)
@@ -370,16 +374,9 @@ class SettingsView(QWidget):
         self._invite_member = QPushButton("Invite teammate · grant Editor access")
         self._invite_member.clicked.connect(self._send_team_invite)
         root.addWidget(self._invite_member, 0, Qt.AlignLeft)
-        self._join_code = QLineEdit()
-        self._join_code.setPlaceholderText("Paste an xCAL invitation code")
-        self._join_code.setMaxLength(2048)
-        self._join_code.hide()
-        root.addWidget(self._join_code)
-        self._join_team = QPushButton("Check invitation and join team")
-        self._join_team.clicked.connect(self._join_invited_team)
-        self._join_team.hide()
-        root.addWidget(self._join_team)
-        hint = QLabel("Invitations grant Editor access to the team folder in Google Drive.")
+        hint = QLabel(
+            "Invitations grant Editor access through Google Drive. Teammates "
+            "accept Google's email, then log in to xCAL—no join code needed.")
         self._invite_hint = hint
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
@@ -394,6 +391,9 @@ class SettingsView(QWidget):
             self._members_generation += 1
             self._members_folder = folder
             self._members_loading = False
+            self._member_entries = []
+            self._member_authority = None
+            self._members_loaded_at = 0.0
             self._sharing_allowed = False
             self._members_table.setRowCount(0)
             self._members_refresh.setEnabled(True)
@@ -402,6 +402,7 @@ class SettingsView(QWidget):
         self._team_profile = profile
         self._onboarding_button.setVisible(not bool(profile))
         self._leave_team_button.setVisible(bool(profile))
+        self._switch_team_button.setVisible(bool(profile))
         self._invite_hint.setVisible(bool(profile))
         self._drive_folder.setReadOnly(bool(profile))
         self._pick_drive.setVisible(not bool(profile))
@@ -415,7 +416,8 @@ class SettingsView(QWidget):
         self._invite_member.setVisible(bool(profile))
         self._invite_email.setVisible(bool(profile))
         if config.RECOVERY_MODE:
-            for widget in (self._onboarding_button, self._leave_team_button, self._invite_hint,
+            for widget in (self._onboarding_button, self._leave_team_button,
+                           self._switch_team_button, self._invite_hint,
                            self._invite_email, self._invite_member, self._pick_drive, self._connect_drive):
                 widget.hide()
             self._drive_folder.setReadOnly(True)
@@ -423,25 +425,25 @@ class SettingsView(QWidget):
 
     def _settings_tab_changed(self, index):
         if index == 1:
-            self._refresh_team_members()
+            self._refresh_team_members(force=False)
 
-    def _refresh_team_members(self):
-        if self._members_loading or config.RECOVERY_MODE or not self._team_profile:
+    def _refresh_team_members(self, force=True):
+        if self._members_loading or self._member_write_busy or config.RECOVERY_MODE or not self._team_profile:
             return
         folder = config.GOOGLE_DRIVE_FOLDER_ID
         if not folder or self._team_profile.get("folder_id") != folder:
             self._members_table.setRowCount(0)
             self._members_status.setText("Connect this team's Drive folder to view access.")
             return
+        if not force and self._member_entries and time.monotonic() - self._members_loaded_at < 60:
+            return
         from utils import team_membership, team_access
         self._members_generation += 1
         generation = self._members_generation
         self._members_loading = True
         self._members_refresh.setEnabled(False)
-        self._members_table.setRowCount(0)
-        self._sharing_allowed = False
-        self._invite_member.setEnabled(False)
-        self._members_status.setText("Loading Drive access...")
+        self._members_status.setText(
+            "Refreshing Drive access…" if self._members_table.rowCount() else "Loading Drive access…")
 
         def current():
             return generation == self._members_generation and folder == config.GOOGLE_DRIVE_FOLDER_ID
@@ -450,23 +452,17 @@ class SettingsView(QWidget):
             if not current():
                 return
             entries, authority = result
+            self._member_entries = entries
+            self._member_authority = authority
+            self._members_loaded_at = time.monotonic()
             self._sharing_allowed = authority["can_manage"]
             self._invite_member.setEnabled(self._sharing_allowed and not self._invite_busy)
             self._members_loading = False
             self._members_refresh.setEnabled(True)
-            roles = {"owner": "Owner", "organizer": "Manager", "fileOrganizer": "Content manager",
-                     "writer": "Editor", "commenter": "Commenter", "reader": "Viewer"}
-            self._members_table.setRowCount(len(entries))
-            for row, entry in enumerate(entries):
-                access = {"user": "Person", "group": "Group", "domain": "Domain", "anyone": "Link"}.get(entry["type"], "Other")
-                if entry["inherited"]:
-                    access += " (inherited)"
-                values = [entry["name"], entry["email"] or "—", roles.get(entry["role"], entry["role"]), access]
-                for column, value in enumerate(values):
-                    self._members_table.setItem(row, column, QTableWidgetItem(value))
+            self._render_team_members(entries, authority)
             self._members_status.setText(
-                f"{len(entries)} sharing entries returned by Google Drive. This shows access, not online status. "
-                "Group/domain members may not be listed individually." if entries else
+                "Click a person's role to change or remove their access. "
+                "This list shows Drive access, not online status." if entries else
                 "Google Drive returned no visible sharing entries for this account.")
 
         def failed(_message):
@@ -474,8 +470,16 @@ class SettingsView(QWidget):
                 return
             self._members_loading = False
             self._members_refresh.setEnabled(True)
+            self._sharing_allowed = False
+            self._member_authority = None
+            self._member_entries = []
+            self._members_loaded_at = 0.0
+            self._invite_member.setEnabled(False)
             self._members_table.setRowCount(0)
-            self._members_status.setText("Could not load Drive access. Check your connection and folder permissions, then Refresh.")
+            self._members_status.setText(
+                "Refresh failed. Showing the last known Drive access list."
+                if self._members_table.rowCount() else
+                "Could not load Drive access. Check your connection and folder permissions, then Refresh.")
 
         def load():
             entries = team_membership.list_team_access(folder)
@@ -483,13 +487,156 @@ class SettingsView(QWidget):
 
         run_async(self, load, on_done=done, on_error=failed)
 
+    def _render_team_members(self, entries, authority):
+        """Render Drive members with direct role controls for manageable people."""
+        roles = {"owner": "Owner", "organizer": "Manager", "fileOrganizer": "Content manager",
+                 "writer": "Editor", "commenter": "Commenter", "reader": "Viewer"}
+        self._members_table.setRowCount(len(entries))
+        current_email = authority.get("email", "").casefold()
+        for row, entry in enumerate(entries):
+            self._members_table.removeCellWidget(row, 2)
+            self._members_table.removeCellWidget(row, 3)
+            for column, value in enumerate((entry.get("name") or "—", entry.get("email") or "—")):
+                self._members_table.setItem(row, column, QTableWidgetItem(value))
+
+            manageable = (
+                authority.get("can_manage")
+                and entry.get("type") == "user"
+                and not entry.get("inherited")
+                and entry.get("role") not in ("owner", "organizer")
+                and entry.get("email", "").casefold() != current_email
+            )
+            if manageable:
+                # Keep an underlying text item for accessibility, automated
+                # inspection and clean copy/paste even though the visible cell
+                # uses a direct role picker.
+                self._members_table.setItem(
+                    row, 2, QTableWidgetItem(roles.get(entry.get("role"), entry.get("role", "—"))))
+                picker = QComboBox()
+                picker.setObjectName("MemberRolePicker")
+                picker.setMinimumWidth(132)
+                picker.setStyleSheet(
+                    "QComboBox#MemberRolePicker { padding: 4px 28px 4px 10px; "
+                    "min-height: 28px; color: #f1f3f4; background: #202124; }"
+                    "QComboBox#MemberRolePicker QAbstractItemView { "
+                    "color: #f1f3f4; background: #202124; selection-background-color: #44474e; }")
+                for label, value in (("Editor", "writer"), ("Commenter", "commenter"), ("Viewer", "reader")):
+                    picker.addItem(label, value)
+                picker.setCurrentIndex(max(0, picker.findData(entry.get("role"))))
+                picker.currentIndexChanged.connect(
+                    lambda _index, item=entry, control=picker: self._change_team_member_role(item, control))
+                self._members_table.setCellWidget(row, 2, picker)
+                remove = QPushButton()
+                remove.setObjectName("RemoveTeamMember")
+                remove.setIcon(QIcon(str(config.ASSETS_DIR / "icon_trash.svg")))
+                remove.setIconSize(QSize(20, 20))
+                remove.setFixedSize(36, 36)
+                remove.setToolTip("Remove this person's team folder access")
+                remove.setAccessibleName(f"Remove {entry.get('name') or entry.get('email')} from team")
+                remove.setStyleSheet(
+                    "QPushButton#RemoveTeamMember { padding: 0px; border: none; background: transparent; }"
+                    "QPushButton#RemoveTeamMember:hover { background: #523033; border-radius: 6px; }")
+                remove.clicked.connect(
+                    lambda _checked=False, item=entry, control=picker:
+                    self._change_team_member_role(item, control, action="remove"))
+                host = QWidget()
+                remove_layout = QHBoxLayout(host)
+                remove_layout.setContentsMargins(0, 0, 0, 0)
+                remove_layout.addWidget(remove, 0, Qt.AlignCenter)
+                self._members_table.setCellWidget(row, 3, host)
+            else:
+                role_item = QTableWidgetItem(roles.get(entry.get("role"), entry.get("role", "—")))
+                if entry.get("inherited"):
+                    role_item.setToolTip("Inherited access must be changed on the parent folder in Google Drive.")
+                self._members_table.setItem(row, 2, role_item)
+
+    def _change_team_member_role(self, entry, picker, action=None):
+        """Apply a role selection directly from the members table."""
+        from utils import team_access
+        if self._member_write_busy or config.RECOVERY_MODE:
+            return
+        folder = config.GOOGLE_DRIVE_FOLDER_ID
+        action = action or picker.currentData()
+        previous = entry.get("role")
+        if not action or action == previous:
+            return
+        labels = {"writer": "Editor", "commenter": "Commenter", "reader": "Viewer", "remove": "Remove access"}
+        email = entry.get("email") or entry.get("name") or "this member"
+        prompt = (
+            f"Are you sure you want to remove {email} from this team's Google Drive folder?"
+            if action == "remove" else f"Change {email} to {labels[action]}?")
+        if QMessageBox.question(self, "Confirm team access", prompt) != QMessageBox.Yes:
+            picker.blockSignals(True)
+            picker.setCurrentIndex(max(0, picker.findData(previous)))
+            picker.blockSignals(False)
+            return
+        picker.setEnabled(False)
+        self._member_write_busy = True
+        self._members_table.setEnabled(False)
+        self._members_refresh.setEnabled(False)
+        self._manage_sharing.setEnabled(False)
+        self._members_status.setText(f"Updating access for {email}…")
+
+        def work():
+            if folder != config.GOOGLE_DRIVE_FOLDER_ID:
+                raise RuntimeError("The active team changed. Reopen the Team tab.")
+            team_access.change_member(entry["id"], role=action, remove=action == "remove")
+
+        def finish():
+            self._member_write_busy = False
+            self._members_table.setEnabled(True)
+            self._members_refresh.setEnabled(True)
+            self._manage_sharing.setEnabled(True)
+            return folder == config.GOOGLE_DRIVE_FOLDER_ID
+
+        def saved(_result):
+            if not finish():
+                return
+            if action == "remove":
+                self._member_entries = [row for row in self._member_entries if row.get("id") != entry.get("id")]
+            else:
+                entry["role"] = action
+            self._members_loaded_at = time.monotonic()
+            self._render_team_members(self._member_entries, self._member_authority)
+            self._members_status.setText(
+                f"Removed {email} from the team." if action == "remove" else f"{email} is now {labels[action]}.")
+
+        def failed(message):
+            if not finish():
+                return
+            picker.blockSignals(True)
+            picker.setCurrentIndex(max(0, picker.findData(previous)))
+            picker.blockSignals(False)
+            picker.setEnabled(True)
+            self._members_status.setText("The Drive access change did not finish.")
+            QMessageBox.warning(self, "Could not change team access", str(message))
+
+        run_async(self, work, on_done=saved, on_error=failed)
+
     def _open_sharing_management(self):
-        """Read current Google authority before offering any destructive action."""
+        """Open advanced ownership and sharing-policy controls, reusing loaded data."""
         from utils import team_access, team_membership
         if config.RECOVERY_MODE or not self._team_profile:
             return
         folder = config.GOOGLE_DRIVE_FOLDER_ID
         self._manage_sharing.setEnabled(False)
+
+        def open_dialog(context, entries):
+            self._manage_sharing.setEnabled(True)
+            if folder != config.GOOGLE_DRIVE_FOLDER_ID:
+                return
+            from qt.views.team_sharing_qt import TeamSharingDialog
+
+            def changed():
+                self._members_loaded_at = 0.0
+                self._refresh_team_members(force=True)
+                self._set_status("Google Drive sharing updated.", config.COLOR_SUCCESS)
+
+            TeamSharingDialog(context, entries, folder, changed, self).exec()
+
+        if self._member_authority is not None and self._member_entries:
+            open_dialog(self._member_authority, self._member_entries)
+            return
 
         def load():
             context = team_access.authority()
@@ -500,17 +647,14 @@ class SettingsView(QWidget):
             self._set_status(f"Could not manage sharing: {message}", config.COLOR_WARNING)
 
         def done(result):
-            self._manage_sharing.setEnabled(True)
-            if folder != config.GOOGLE_DRIVE_FOLDER_ID:
-                return
             context, entries = result
-            from qt.views.team_sharing_qt import TeamSharingDialog
-
-            def changed():
-                self._refresh_team_members()
-                self._set_status("Google Drive sharing updated.", config.COLOR_SUCCESS)
-
-            TeamSharingDialog(context, entries, folder, changed, self).exec()
+            if folder != config.GOOGLE_DRIVE_FOLDER_ID:
+                self._manage_sharing.setEnabled(True)
+                return
+            self._member_authority = context
+            self._member_entries = entries
+            self._members_loaded_at = time.monotonic()
+            open_dialog(context, entries)
 
         run_async(self, load, on_done=done, on_error=failed)
 
@@ -602,14 +746,16 @@ class SettingsView(QWidget):
         else:
             self.window().close()
 
-    def _open_team_onboarding(self):
+    def _open_team_onboarding(self, _checked=False, initial_user=None):
         if self._require_no_team():
             return False
         if not self._connect_drive.isEnabled():
             QMessageBox.information(self, "Connection in progress", "Wait for the current connection attempt to finish.")
             return False
         from qt.views.team_onboarding_qt import TeamOnboardingDialog
-        dialog = TeamOnboardingDialog(self, client_ready=Path(config.GOOGLE_OAUTH_CLIENT_FILE).is_file())
+        dialog = TeamOnboardingDialog(
+            self, client_ready=Path(config.GOOGLE_OAUTH_CLIENT_FILE).is_file(),
+            initial_user=initial_user)
         if dialog.exec() != QDialog.Accepted or not dialog.selection:
             return False
         choice = dialog.selection
@@ -618,10 +764,42 @@ class SettingsView(QWidget):
             self._drive_folder.setText(choice["folder"]["id"])
             self._save_drive_connection()
         else:
-            self._pending_team_name = None
-            self._join_code.setText(choice["code"])
-            self._join_invited_team(connect_after=True)
+            self._activate_team(choice["team"])
         return True
+
+    def _activate_team(self, team):
+        try:
+            update_settings(config.ENV_PATH, {
+                "GOOGLE_DRIVE_FOLDER_ID": team["folder"]["id"]})
+        except OSError as exc:
+            self._set_status(f"Could not save team profile: {exc}",
+                             config.COLOR_WARNING)
+            return
+        QMessageBox.information(
+            self, "Opening team",
+            f"Opening {team['profile']['name']} as {team['account']}. "
+            "xCAL will restart into that team's workspace.")
+        if hasattr(self.window(), "restart"):
+            self.window().restart()
+        else:
+            self.window().close()
+
+    def _switch_team(self):
+        if config.RECOVERY_MODE or not self._team_profile:
+            return
+        if (db.get_client().pending_count()
+                or offline_store.pending_sync_summary().total):
+            QMessageBox.warning(
+                self, "Unsynced changes",
+                "Sync pending changes before switching teams. Your local work "
+                "has not been deleted.")
+            return
+        from qt.views.team_onboarding_qt import TeamOnboardingDialog
+        dialog = TeamOnboardingDialog(
+            self, client_ready=Path(config.GOOGLE_OAUTH_CLIENT_FILE).is_file(),
+            allow_create=False)
+        if dialog.exec() == QDialog.Accepted and dialog.selection:
+            self._activate_team(dialog.selection["team"])
 
     def _create_team_profile(self):
         if self._require_no_team():
@@ -649,35 +827,18 @@ class SettingsView(QWidget):
         def done(invitation):
             self._invite_busy = False
             self._refresh_team_members()
-            from PySide6.QtWidgets import QApplication
-            QApplication.clipboard().setText(invitation["code"])
-            QMessageBox.information(self, "Invitation ready", f"{invitation['email']} has team folder access. The xCAL join code was copied; send it to them privately. No passwords or Google tokens are in the code.")
+            QMessageBox.information(
+                self, "Invitation sent",
+                f"{invitation['email']} now has Editor access to "
+                f"{invitation['team']}. They should accept Google's Drive "
+                "sharing email, open xCAL Community, and choose "
+                "\"Already in a team? Log in.\"")
         def failed(message):
             self._invite_busy = False
             self._sharing_allowed = False
             self._refresh_team_members()
             self._set_status(f"Invitation did not finish: {message}", config.COLOR_WARNING)
         run_async(self, lambda: team_membership.invite_member(email), on_done=done, on_error=failed)
-
-    def _join_invited_team(self, _checked=False, connect_after=False):
-        if self._require_no_team():
-            return
-        from utils import team_membership
-        code = self._join_code.text()
-        self._join_team.setEnabled(False)
-        def work():
-            google_drive_client.authorize()
-            return team_membership.validate_join(code)
-        def done(result):
-            self._join_team.setEnabled(True)
-            self._drive_folder.setText(result["folder"]["id"])
-            self._set_status(f"Invitation checked for {result['profile']['name']} as {result['account']}. Connect the selected folder to finish joining.", config.COLOR_SUCCESS)
-            if connect_after:
-                self._save_drive_connection()
-        def failed(message):
-            self._join_team.setEnabled(True)
-            self._set_status(f"Cannot join: {message}", config.COLOR_WARNING)
-        run_async(self, work, on_done=done, on_error=failed)
 
     def _edit_team_parameters(self):
         from qt.views.team_setup_fields_qt import TeamSetupFieldsDialog
@@ -724,11 +885,6 @@ class SettingsView(QWidget):
         run_async(self, lambda: workspace_backup.restore_workspace(filename, parent, check_interruption), on_done=done,
                   on_error=lambda message: self._set_status(f"Restore failed: {message}", config.COLOR_WARNING))
 
-    def _choose_oauth_client(self):
-        filename, _ = QFileDialog.getOpenFileName(self, "Google Desktop OAuth client", "", "JSON (*.json)")
-        if filename:
-            self._oauth_file.setText(filename)
-
     def _save_drive_connection(self):
         if self._require_no_team():
             return
@@ -737,7 +893,7 @@ class SettingsView(QWidget):
             return
         folder = config.clean_drive_folder_id(self._drive_folder.text())
         team_name = self._pending_team_name
-        client_path = Path(self._oauth_file.text()).expanduser().resolve()
+        client_path = Path(config.GOOGLE_OAUTH_CLIENT_FILE).resolve()
         try:
             if not re.fullmatch(r"[A-Za-z0-9_-]+", folder):
                 raise ValueError("Paste a Google Drive folder URL or folder ID.")
@@ -759,8 +915,6 @@ class SettingsView(QWidget):
             return
         if QMessageBox.question(self, "Connect team Drive", "Create or use the .xcal-catalog-v1 folder inside this Drive?\n\nYour existing videos and data will not be moved. Other members need Editor access to this folder. You may be asked to sign in to Google.") != QMessageBox.Yes:
             return
-        previous_client = config.GOOGLE_OAUTH_CLIENT_FILE
-        config.GOOGLE_OAUTH_CLIENT_FILE = str(client_path)
         self._connect_drive.setEnabled(False)
 
         def work():
@@ -778,20 +932,12 @@ class SettingsView(QWidget):
             return result
 
         def done(_result):
-            import hashlib
-            content = json.dumps(client, sort_keys=True)
-            # Versioned client file avoids changing the old configuration if the
-            # settings commit fails between these two writes.
-            saved_client = config.USER_DATA_DIR / "oauth-clients" / (hashlib.sha256(content.encode()).hexdigest() + ".json")
             try:
-                atomic_write_text(saved_client, content)
-                update_settings(config.ENV_PATH, {"GOOGLE_DRIVE_FOLDER_ID": folder,
-                                "GOOGLE_OAUTH_CLIENT_FILE": str(saved_client)})
+                update_settings(config.ENV_PATH, {"GOOGLE_DRIVE_FOLDER_ID": folder})
             except OSError as exc:
                 failed(f"Could not save connection settings: {exc}")
                 return
             self._connect_drive.setEnabled(True)
-            config.GOOGLE_OAUTH_CLIENT_FILE = previous_client
             QMessageBox.information(self, "Connection saved", "Connection saved. xCAL will close so the next launch loads this team's isolated workspace. Your previous local workspace has not been moved or deleted.")
             if hasattr(self.window(), "restart"):
                 self.window().restart()
@@ -799,7 +945,6 @@ class SettingsView(QWidget):
                 self.window().close()
 
         def failed(message):
-            config.GOOGLE_OAUTH_CLIENT_FILE = previous_client
             self._pending_team_name = None
             self._connect_drive.setEnabled(True)
             self._set_status(f"Drive setup did not finish: {message}", config.COLOR_WARNING)
@@ -1020,11 +1165,17 @@ class SettingsView(QWidget):
 
     # ── Backend ──────────────────────────────────────────────────────────────
 
-    def _verify_connection(self):
+    def _verify_connection(self, force=False):
         if config.RECOVERY_MODE:
             self._show_google_user(None)
             self._set_banner("Offline recovery copy - cloud sync is disabled", config.COLOR_WARNING)
             return
+        if self._connection_checking:
+            return
+        if not force and time.monotonic() - self._connection_checked_at < 60:
+            self._show_google_user(google_drive_client.cached_user())
+            return
+        self._connection_checking = True
         self._set_banner("Checking connection...", config.COLOR_TEXT_MUTED)
 
         def _check():
@@ -1036,6 +1187,8 @@ class SettingsView(QWidget):
             return db_ok, drive_ok, user
 
         def _done(res):
+            self._connection_checking = False
+            self._connection_checked_at = time.monotonic()
             dbok, stok, user = res
             self._show_google_user(user)
             if dbok and stok:
@@ -1048,6 +1201,8 @@ class SettingsView(QWidget):
                                  config.COLOR_WARNING)
 
         def _error(message):
+            self._connection_checking = False
+            self._connection_checked_at = time.monotonic()
             self._show_google_user(google_drive_client.cached_user())
             self._set_banner(
                 f"Connection check failed: {message}", config.COLOR_WARNING)
@@ -1064,14 +1219,41 @@ class SettingsView(QWidget):
                 f"Signed in as {user.name}.", config.COLOR_SUCCESS)
             if self._on_reconnect:
                 self._on_reconnect()
-            self._verify_connection()
+            self._verify_connection(force=True)
             from utils import team_membership
             if not db.fetch_app_doc(team_membership.TEAM_DOC):
-                self._open_team_onboarding()
+                self._open_team_onboarding(initial_user=user)
 
         run_async(self, google_drive_client.authorize, on_done=_done,
                   on_error=lambda m: self._set_status(
                       f"Google sign-in failed: {m}", config.COLOR_WARNING))
+
+    def _sign_out(self):
+        if (db.get_client().pending_count()
+                or offline_store.pending_sync_summary().total):
+            QMessageBox.warning(
+                self, "Unsynced changes",
+                "Sync pending changes before signing out. Your local work has "
+                "not been deleted.")
+            return
+        user = google_drive_client.cached_user()
+        label = user.email if user else "this Google account"
+        if QMessageBox.question(
+                self, "Sign out of Google",
+                f"Sign out {label} from xCAL Community on this device?\n\n"
+                "Team files and Drive permissions will not be changed.") != QMessageBox.Yes:
+            return
+        try:
+            google_drive_client.disconnect()
+            update_settings(config.ENV_PATH, {"GOOGLE_DRIVE_FOLDER_ID": ""})
+        except OSError as exc:
+            self._set_status(f"Could not finish signing out: {exc}",
+                             config.COLOR_WARNING)
+            return
+        if hasattr(self.window(), "restart"):
+            self.window().restart()
+        else:
+            self.window().close()
 
     def _show_google_user(self, user):
         self._google_name.setText(user.name if user else "Not signed in")
@@ -1080,6 +1262,8 @@ class SettingsView(QWidget):
         self._google_name.setStyleSheet(
             f"font-weight:600; color:"
             f"{config.COLOR_SUCCESS if user else config.COLOR_WARNING};")
+        self._signin.setVisible(not bool(user))
+        self._signout.setEnabled(bool(user))
 
     def _set_status(self, text, color):
         self._status.setText(text)

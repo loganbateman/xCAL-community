@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from database.models import InventoryItem, Setup
 from inventory_fields import BASELINE_SETUP_CATEGORY, PARTS_CATEGORIES
 import offline_store
+import otk_baseline
 import setup_fields as sf
 from utils import google_drive_client
 from qt.views.session_detail_qt import (
@@ -31,8 +32,8 @@ from qt.views.parts_qt import (
     _save_inventory_changes)
 from qt.views.setup_builder_qt import (
     SetupBuilderView, _PartPickerDialog, _SetupHistoryDialog,
-    _SetupOptionsDialog, _baseline_name, _run_history_lines,
-    _split_legacy_run_timestamp)
+    _NewSetupDialog, _SetupOptionsDialog, _baseline_name, _run_history_lines,
+    _setup_copy_sources, _split_legacy_run_timestamp)
 from qt.views.settings_qt import SettingsView
 from qt.views.setups_qt import SetupsView
 from qt.views.compare_qt import _Slot
@@ -352,6 +353,7 @@ def test_sync_queue_shows_destination_and_transfer_progress(
 
     dialog = SyncQueueDialog()
     dialog.set_connections(True, True)
+    assert dialog._retry.isEnabled()
     dialog.set_event({
         "key": item.key, "state": "syncing", "percent": 42,
         "error": None,
@@ -729,12 +731,14 @@ def test_setup_secondary_actions_are_consolidated_into_settings():
 
     assert builder._save_status.text() == "\u2713  Saved"
     assert not builder._save_status.isHidden()
-    assert builder._options_btn.text() == "Setup Settings"
+    assert builder._options_btn.text() == "Setup Actions"
     assert not hasattr(builder, "_history_btn")
     assert not hasattr(builder, "_dest_btn")
     assert not hasattr(builder, "_copy_btn")
     options = _SetupOptionsDialog(builder)
     assert options.load_button.isEnabled()
+    assert options.baseline_button.isEnabled()
+    assert options.previous_button.isEnabled()
     assert options.destination_button.isEnabled()
     assert options.history_button.isEnabled()
     dialog = _SetupHistoryDialog(builder._setup)
@@ -742,6 +746,32 @@ def test_setup_secondary_actions_are_consolidated_into_settings():
     options.deleteLater()
     dialog.deleteLater()
     builder.deleteLater()
+
+
+def test_new_setup_dialog_offers_blank_baseline_and_previous_sources():
+    _app()
+    dialog = _NewSetupDialog()
+
+    assert dialog.windowTitle() == "Create Setup"
+    assert dialog.baseline_button.text() == "Choose baseline\u2026"
+    assert dialog.previous_button.text() == "Choose setup\u2026"
+    assert dialog.blank_button.text() == "Start blank"
+
+    dialog._choose("baseline")
+    assert dialog.choice == "baseline"
+    dialog.deleteLater()
+
+
+def test_setup_copy_sources_include_builtin_baseline_before_team_saves_it():
+    previous = Setup(id="setup-1", name="Previous race setup")
+
+    baselines = _setup_copy_sources(
+        [previous], source_kind="baseline")
+    previous_setups = _setup_copy_sources(
+        [previous], source_kind="previous")
+
+    assert [setup.id for setup in baselines] == [otk_baseline.BUILTIN_ID]
+    assert [setup.id for setup in previous_setups] == ["setup-1"]
 
 
 def test_run_revision_history_is_readable_and_hides_internal_ids():
@@ -940,8 +970,10 @@ def test_settings_identity_is_read_only_google_profile():
     assert "Google email" in labels
     assert "Your Name" not in labels
     assert set(settings.findChildren(QLineEdit)) == {
-        settings._drive_folder, settings._oauth_file, settings._team_name,
-        settings._invite_email, settings._join_code}
+        settings._drive_folder, settings._team_name,
+        settings._invite_email}
+    assert "Choose OAuth client JSON" not in {
+        button.text() for button in settings.findChildren(QPushButton)}
     settings.deleteLater()
 
 
@@ -1139,7 +1171,7 @@ def test_baseline_name_includes_kart_and_track_and_prefill_button_is_gone():
     assert _baseline_name("2025 TonyKart", "Purdue GP") == (
         "2025 TonyKart · Purdue GP Baseline")
     assert not hasattr(builder, "_prefill_btn")
-    assert "Load another setup" in builder._options_btn.toolTip()
+    assert "Apply a baseline" in builder._options_btn.toolTip()
     builder._is_baseline = True
     builder._chassis_cb.setText("2025 TonyKart")
     builder._track.setText("Purdue GP")

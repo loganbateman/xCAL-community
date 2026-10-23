@@ -49,7 +49,10 @@ CATEGORIES: tuple[str, ...] = (
 # Baselines are full setup definitions rather than countable stock rows, but
 # they live in the Parts workspace so reusable team definitions have one home.
 BASELINE_SETUP_CATEGORY = "Baseline Setups"
-PARTS_CATEGORIES: tuple[str, ...] = CATEGORIES + (BASELINE_SETUP_CATEGORY,)
+BUILTIN_CATEGORIES = CATEGORIES
+# Keep imported registry references live when team definitions change.
+CATEGORIES = list(BUILTIN_CATEGORIES)
+PARTS_CATEGORIES = CATEGORIES + [BASELINE_SETUP_CATEGORY]
 
 
 CATEGORY_FIELDS: dict[str, tuple[InventoryField, ...]] = {
@@ -186,4 +189,16 @@ MAX_INVENTORY_COST = 9_999_999_999.99
 def fields_for_category(category: str) -> tuple[InventoryField, ...]:
     """Return the configured fields for ``category`` (or an empty tuple)."""
 
-    return CATEGORY_FIELDS.get(category, ())
+    return CATEGORY_FIELDS.get(category, CUSTOM_CATEGORY_FIELDS.get(category, ()))
+
+
+CUSTOM_CATEGORY_FIELDS: dict[str, tuple[InventoryField, ...]] = {}
+
+
+def apply_part_types(types):
+    CATEGORIES[:] = list(BUILTIN_CATEGORIES) + [row["name"] for row in types]
+    PARTS_CATEGORIES[:] = CATEGORIES + [BASELINE_SETUP_CATEGORY]
+    CUSTOM_CATEGORY_FIELDS.clear()
+    CUSTOM_CATEGORY_FIELDS.update({row["name"]: tuple(
+        InventoryField(item["key"], item["label"], item["kind"], item["unit"])
+        for item in row["fields"]) for row in types})

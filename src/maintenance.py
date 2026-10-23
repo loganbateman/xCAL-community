@@ -14,6 +14,7 @@ import re
 import session_types
 
 CHECKS_KEY = "maintenance_checks"
+SCOPE_KEY = "_maintenance_checklist_scope"
 DEFAULT_START = "1970-01-01"
 DEFAULT_START_NAME = ""
 

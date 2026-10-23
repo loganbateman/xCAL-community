@@ -24,21 +24,32 @@ def immediate(_parent, work, on_done=None, on_error=None, **_kwargs):
             on_done(result)
 
 
-def test_first_login_has_only_create_or_join_choices():
+def test_first_login_asks_for_google_account_before_team(monkeypatch):
     app()
+    monkeypatch.setattr("qt.views.team_onboarding_qt.drive.cached_user", lambda: None)
+    monkeypatch.setattr(
+        "qt.views.team_onboarding_qt.drive.has_saved_credentials", lambda: False)
     dialog = TeamOnboardingDialog(client_ready=False)
     assert dialog._pages.currentIndex() == 0
-    assert dialog.create_choice.text() == "Create a Team"
-    assert dialog.join_choice.text() == "Join a Team"
-    assert "Nothing is wrong with your account" in dialog.status.text()
-    assert "original app's client" in dialog.status.text()
-    dialog.create_choice.click()
-    assert dialog._pages.currentIndex() == 1
-    assert not dialog.choose_folder.isEnabled()
-    assert not dialog.create_continue.isEnabled()
-    dialog.join_choice.click()
-    assert dialog._pages.currentIndex() == 2
-    assert not dialog.join_continue.isEnabled()
+    assert dialog.account_continue.text() == "Sign in with Google"
+    assert not dialog.account_continue.isEnabled()
+    assert dialog.create_choice.text() == "Create a New Team"
+    dialog.deleteLater()
+
+
+def test_saved_login_can_continue_without_source_checkout_client(monkeypatch):
+    app()
+    user = team_membership.drive.GoogleUser("Friend", "friend@example.test")
+    monkeypatch.setattr(
+        "qt.views.team_onboarding_qt.drive.cached_user", lambda: user)
+    monkeypatch.setattr(
+        "qt.views.team_onboarding_qt.drive.has_saved_credentials", lambda: True)
+
+    dialog = TeamOnboardingDialog(client_ready=False)
+
+    assert dialog.account_continue.isEnabled()
+    assert not dialog.account_other.isEnabled()
+    assert "saved on this device" in dialog.account_continue.toolTip()
     dialog.deleteLater()
 
 
@@ -55,17 +66,23 @@ def test_creation_requires_name_and_selected_folder_and_performs_no_write():
     dialog.deleteLater()
 
 
-def test_join_code_validation_is_local_and_requires_permission_check_later():
+def test_google_login_then_team_profile_selection(monkeypatch):
     app()
+    user = team_membership.drive.GoogleUser("Friend", "friend@example.test")
+    team = {"profile": {"id": "team", "name": "Beta"},
+            "folder": {"id": "folder", "name": "Beta Drive"},
+            "account": user.email, "verified": True}
+    monkeypatch.setattr("qt.views.team_onboarding_qt.drive.cached_user", lambda: None)
+    monkeypatch.setattr("qt.views.team_onboarding_qt.drive.authorize", lambda: user)
+    monkeypatch.setattr("qt.views.team_onboarding_qt.team_membership.cached_teams", lambda _email: [])
+    monkeypatch.setattr("qt.views.team_onboarding_qt.team_membership.discover_accessible_teams", lambda: [team])
+    monkeypatch.setattr("qt.views.team_onboarding_qt.run_async", immediate)
     dialog = TeamOnboardingDialog(client_ready=True)
-    dialog.join_choice.click()
-    dialog.invite_code.setText("bad code")
-    dialog.join_continue.click()
-    assert dialog.selection is None
-    code = team_membership.encode_invite({"id": "team", "folder_id": "folder", "name": "Beta"})
-    dialog.invite_code.setText(code)
-    dialog.join_continue.click()
-    assert dialog.selection == {"action": "join", "code": code}
+    dialog.account_continue.click()
+    assert dialog._pages.currentIndex() == 1
+    assert dialog.team_choices.count() == 1
+    dialog.open_team.click()
+    assert dialog.selection == {"action": "open", "team": team}
     dialog.deleteLater()
 
 
@@ -138,7 +155,7 @@ def active_team_settings(monkeypatch):
     return SettingsView()
 
 
-def test_active_team_blocks_creation_join_and_drive_switch(monkeypatch):
+def test_active_team_blocks_creation_and_drive_replacement(monkeypatch):
     settings = active_team_settings(monkeypatch)
     network = Mock()
     monkeypatch.setattr("qt.views.settings_qt.run_async", network)
@@ -147,7 +164,7 @@ def test_active_team_blocks_creation_join_and_drive_switch(monkeypatch):
     assert settings._pick_drive.isHidden()
     assert settings._drive_folder.isReadOnly()
     assert settings._open_team_onboarding() is False
-    settings._join_invited_team()
+    assert not settings._switch_team_button.isHidden()
     settings._save_drive_connection()
     settings._pick_drive_folder()
     network.assert_not_called()
@@ -184,6 +201,32 @@ def test_leave_team_only_disconnects_local_configuration(monkeypatch, tmp_path):
     from dotenv import dotenv_values
     assert dotenv_values(env)["GOOGLE_DRIVE_FOLDER_ID"] == ""
     assert settings._pending_team_name is None
+    restart.assert_called_once()
+    settings.deleteLater()
+
+
+def test_google_sign_out_clears_only_local_auth_and_team_selection(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    monkeypatch.setattr(
+        "database.client.get_client",
+        Mock(return_value=Mock(pending_count=lambda: 0)))
+    monkeypatch.setattr(
+        "offline_store.pending_sync_summary", Mock(return_value=Mock(total=0)))
+    monkeypatch.setattr(QMessageBox, "question", Mock(return_value=QMessageBox.Yes))
+    monkeypatch.setattr(
+        "utils.google_drive_client.cached_user",
+        Mock(return_value=team_membership.drive.GoogleUser(
+            "Owner", "owner@example.test")))
+    disconnect = Mock()
+    monkeypatch.setattr("utils.google_drive_client.disconnect", disconnect)
+    saved = Mock()
+    monkeypatch.setattr("qt.views.settings_qt.update_settings", saved)
+    restart = Mock()
+    settings.restart = restart
+    settings._sign_out()
+    disconnect.assert_called_once()
+    saved.assert_called_once()
+    assert saved.call_args.args[1] == {"GOOGLE_DRIVE_FOLDER_ID": ""}
     restart.assert_called_once()
     settings.deleteLater()
 

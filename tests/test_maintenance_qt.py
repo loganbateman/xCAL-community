@@ -132,15 +132,20 @@ def test_mouse_click_checklist_is_once_per_sheet_and_independent_of_runs(app, co
     builder.deleteLater()
 
 
-def test_disabled_checkboxes_explain_missing_kart(app, context):
+def test_basic_checkboxes_work_without_kart_and_intervals_wait(app, context):
     session, setup = context
     setup.chassis_id = None
     setup.chassis_name = None
+    setup.data[m.SCOPE_KEY] = "draft-sheet-1"
     card = MaintenanceChecklist()
     card.refresh(m.default_policy(), setup, [session], [setup])
     checkbox = card.findChildren(QCheckBox)[0]
-    assert not checkbox.isEnabled()
-    assert "Choose a kart" in checkbox.toolTip()
+    assert checkbox.isEnabled()
+    assert "Choose a kart" in card._summary.text()
+    checkbox.click()
+    record = next(iter(card.records().values()))
+    assert record["kart_key"] == "draft-sheet-1"
+    assert record["checked"]
     card.deleteLater()
 
 

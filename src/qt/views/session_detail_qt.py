@@ -621,19 +621,21 @@ class SessionDetailView(QWidget):
     # ── Setups ────────────────────────────────────────────────────────────────
 
     def _load_setups(self):
-        self._clear(self._setups_lay)
         if not self._folder_id:
+            self._clear(self._setups_lay)
             return
-        loading = QLabel("Loading\u2026")
-        loading.setObjectName("Muted")
-        self._setups_lay.addWidget(loading)
-        self._setups_lay.addStretch(1)
         fid = self._folder_id
         generation = self._load_generation
         cached_now = offline_store.load_setups(fid)
         if cached_now:
             self._render_setups(
-                cached_now, "Local offline copy — checking Drive catalog…")
+                cached_now, "Local copy ready · checking for team changes…")
+        else:
+            self._clear(self._setups_lay)
+            loading = QLabel("Loading…")
+            loading.setObjectName("Muted")
+            self._setups_lay.addWidget(loading)
+            self._setups_lay.addStretch(1)
 
         def _render(setups, err=None):
             if generation == self._load_generation and fid == self._folder_id:

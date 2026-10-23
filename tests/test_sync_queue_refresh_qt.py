@@ -70,3 +70,28 @@ def test_queue_refresh_preserves_active_transfer_progress(app, monkeypatch):
     assert [bar.value() for bar in dialog.findChildren(QProgressBar)] == [42]
     dialog.close()
     dialog.deleteLater()
+
+
+def test_save_sync_runs_immediately_when_connected(monkeypatch):
+    monkeypatch.setattr("qt.main_window.config.RECOVERY_MODE", False)
+    monkeypatch.setattr(
+        "qt.main_window.offline_store.pending_sync_summary",
+        lambda: PendingSyncSummary(setups=1))
+    window = SimpleNamespace(
+        _closing=False,
+        _offline_syncing=False,
+        _cloud_connected=True,
+        _sync_offline_work=Mock(),
+        _connect=Mock(),
+        _refresh_sync_indicator=Mock(),
+    )
+
+    MainWindow._run_scheduled_sync(window)
+
+    window._sync_offline_work.assert_called_once_with()
+    window._connect.assert_not_called()
+
+
+def test_background_sync_interval_stays_light():
+    assert MainWindow.BACKGROUND_SYNC_INTERVAL_MS == 3 * 60_000
+    assert MainWindow.SAVE_SYNC_DEBOUNCE_MS < 1_000

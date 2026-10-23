@@ -4,10 +4,15 @@ An open-source kart-team desktop workspace for Purdue Grand Prix and other kart
 teams. Setups, per-run changes, notes, telemetry, videos, parts, and comparisons
 stay together. Built with Python and PySide6; licensed under MIT.
 
-**Community preview, not yet a production release.** This is a clean-history
+**Community beta, not yet a production release.** This is a clean-history
 community edition derived from xCAL v0.5.36. It has no bundled team credentials,
 roster, Supabase project, access password, or private data. The original team app
 continues using Supabase and has not been migrated.
+
+The current unsigned Windows beta is available from
+[GitHub releases](https://github.com/loganbateman/xCAL-community/releases).
+See [tester instructions](docs/BETA_QUICKSTART.md) and
+[0.2.1 release notes](docs/RELEASE_0.2.1.md).
 
 ## Storage
 
@@ -38,7 +43,7 @@ python -m pip install -r requirements.txt
 python src/main.py
 ```
 
-The first launch opens Create a Team / Join a Team. Developers can use
+The first launch asks for your Google account, then a team profile. Developers can use
 `python src/main.py --preview-local` to explore without Google credentials.
 To collaborate, follow [Google Drive setup](docs/GOOGLE_DRIVE_SETUP.md).
 Configuration and tokens are stored outside the checkout, in a separate
@@ -65,6 +70,16 @@ python -m pyflakes src scripts
 python scripts/check_publication.py
 .\build.ps1
 ```
+
+Maintainers create the portable beta and installer with a Community-only Desktop
+OAuth client stored outside the checkout:
+
+```powershell
+.\build.ps1 -OAuthClient C:\private\community-client.json -Package -Installer
+```
+
+The packaged client identifies the application; each user's private Google token
+is created after sign-in and stays under that Windows user's local app-data folder.
 
 See [architecture and current limitations](docs/ARCHITECTURE.md),
 [production-readiness checklist](docs/PRODUCTION_READINESS.md),

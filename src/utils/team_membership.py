@@ -1,7 +1,6 @@
 """Owner-invited teams backed by actual Drive permissions, not secret join codes."""
 from __future__ import annotations
 
-import base64
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -9,14 +8,72 @@ import re
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from googleapiclient.errors import HttpError
+
 import config
 import database.client as db
 from database.drive_store import DriveStore
-from database.drive_transport import DriveJournal
+from database.drive_transport import DriveJournal, JOURNAL_NAME
 from utils import google_drive_client as drive
+from utils.atomic_files import atomic_write_text
 
 TEAM_DOC = "team_profile"
-PREFIX = "xcal-team-v1:"
+TEAM_CACHE_PATH = config.USER_DATA_DIR / "team_accounts.json"
+
+
+def cached_teams(account_email):
+    """Return non-authoritative team shortcuts for one Google account."""
+    try:
+        payload = json.loads(TEAM_CACHE_PATH.read_text(encoding="utf-8"))
+        rows = payload.get("accounts", {}).get(account_email.casefold(), [])
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+        return []
+    teams = []
+    for row in rows:
+        profile, folder = row.get("profile", {}), row.get("folder", {})
+        if (isinstance(profile.get("id"), str)
+                and isinstance(profile.get("name"), str)
+                and re.fullmatch(r"[A-Za-z0-9_-]+", folder.get("id", ""))):
+            teams.append({"profile": profile, "folder": folder,
+                          "account": account_email.casefold(), "verified": False})
+    return teams
+
+
+def remember_teams(account_email, teams):
+    """Cache verified team labels; this cache never grants Drive access."""
+    try:
+        payload = json.loads(TEAM_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        payload = {"schema": 1, "accounts": {}}
+    accounts = payload.setdefault("accounts", {})
+    accounts[account_email.casefold()] = [
+        {"profile": item["profile"], "folder": {
+            "id": item["folder"]["id"],
+            "name": item["folder"].get("name", "Google Drive folder")}}
+        for item in teams]
+    TEAM_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(TEAM_CACHE_PATH, json.dumps(payload, ensure_ascii=False))
+
+
+def validate_team_shortcut(team):
+    """Revalidate cached Drive access without replaying the full journal."""
+    folder_id = team.get("folder", {}).get("id", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
+        raise ValueError("This saved team shortcut is invalid.")
+    folder = drive.folder_details(folder_id)
+    if not folder.get("capabilities", {}).get("canAddChildren"):
+        raise PermissionError(
+            "This Google account no longer has Editor access to that team.")
+    service = drive._worker_service()
+    matches = service.files().list(
+        q=(f"'{folder_id}' in parents and name = '{JOURNAL_NAME}' and "
+           f"mimeType = '{drive.FOLDER_MIME}' and trashed = false"),
+        fields="files(id)", pageSize=2, supportsAllDrives=True,
+        includeItemsFromAllDrives=True).execute().get("files", [])
+    if len(matches) != 1:
+        raise ValueError("This folder is not an initialized xCAL team.")
+    return {"profile": team["profile"], "folder": folder,
+            "account": team["account"], "verified": True}
 
 
 def list_team_access(folder_id=None):
@@ -119,29 +176,6 @@ def create_team_in_folder(folder_id, name):
     return profile
 
 
-def encode_invite(profile):
-    payload = {"schema": 1, "team_id": profile["id"], "folder_id": profile["folder_id"],
-               "team_name": profile["name"]}
-    return PREFIX + base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-
-
-def decode_invite(code):
-    code = (code or "").strip()
-    if len(code) > 2048 or not code.startswith(PREFIX):
-        raise ValueError("Paste an xCAL team invitation code.")
-    try:
-        encoded = code[len(PREFIX):]
-        payload = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("This invitation code is invalid.") from exc
-    if (not isinstance(payload, dict) or payload.get("schema") != 1
-            or not isinstance(payload.get("folder_id"), str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]+", payload["folder_id"])
-            or not isinstance(payload.get("team_id"), str) or not payload["team_id"]):
-        raise ValueError("This invitation has invalid team details.")
-    return payload
-
-
 def invite_member(email):
     """Called only after explicit owner confirmation; grants Editor permission."""
     email = (email or "").strip().casefold()
@@ -173,21 +207,61 @@ def invite_member(email):
                                        body={"type": "user", "role": "writer", "emailAddress": email},
                                        sendNotificationEmail=True, supportsAllDrives=True,
                                        fields="id").execute()
-    return {"email": email, "code": encode_invite(profile), "team": profile["name"]}
+    return {"email": email, "team": profile["name"]}
 
 
-def validate_join(code):
-    """Read-only validation. A forwarded code never grants Drive access."""
-    invite = decode_invite(code)
+def discover_accessible_teams():
+    """Find editable xCAL teams visible to the signed-in Google account.
+
+    Discovery is read-only. Named Google Drive permission is the sole
+    membership proof, so there is no separate xCAL invitation code.
+    """
     user = drive.current_user(interactive=False, refresh=True, allow_cached=False)
-    folder = drive.folder_details(invite["folder_id"])
-    if not folder.get("capabilities", {}).get("canAddChildren"):
-        raise PermissionError("Ask the team owner to invite this Google account with Editor access first.")
-    with TemporaryDirectory(prefix="xcal-team-join-") as temporary:
-        store = DriveStore(Path(temporary) / "preview.sqlite3", DriveJournal(invite["folder_id"]))
-        store.sync(read_only=True)  # Never publish generated revisions during join validation.
-        rows = store.table("app_docs").select("data").eq("key", TEAM_DOC).execute().data
-        profile = rows[0]["data"] if rows else None
-    if not profile or profile.get("id") != invite["team_id"] or profile.get("folder_id") != folder["id"]:
-        raise ValueError("This invitation does not match the team in that Drive folder.")
-    return {"profile": profile, "folder": folder, "account": user.email}
+    if not user.verified:
+        raise PermissionError("Sign in to Google before looking for your teams.")
+    service = drive._worker_service()
+    journals, token = [], None
+    while True:
+        response = service.files().list(
+            q=(f"name = '{JOURNAL_NAME}' and mimeType = '{drive.FOLDER_MIME}' "
+               "and trashed = false"),
+            spaces="drive", corpora="user", pageSize=1000, pageToken=token,
+            fields="nextPageToken,files(id,parents)", supportsAllDrives=True,
+            includeItemsFromAllDrives=True).execute()
+        journals.extend(response.get("files", []))
+        token = response.get("nextPageToken")
+        if not token:
+            break
+
+    teams, seen = [], set()
+    for journal in journals:
+        for folder_id in journal.get("parents", []):
+            if folder_id in seen or not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
+                continue
+            seen.add(folder_id)
+            try:
+                folder = drive.folder_details(folder_id)
+                if not folder.get("capabilities", {}).get("canAddChildren"):
+                    continue
+                with TemporaryDirectory(prefix="xcal-team-login-") as temporary:
+                    store = DriveStore(
+                        Path(temporary) / "preview.sqlite3",
+                        DriveJournal(folder_id))
+                    store.sync(read_only=True)
+                    rows = (store.table("app_docs").select("data")
+                            .eq("key", TEAM_DOC).execute().data)
+                profile = rows[0]["data"] if rows else None
+                if (not profile or profile.get("folder_id") != folder_id
+                        or not profile.get("id") or not profile.get("name")):
+                    continue
+                teams.append({"profile": profile, "folder": folder,
+                              "account": user.email, "verified": True})
+            except (HttpError, OSError, RuntimeError, ValueError, PermissionError):
+                # A stale or unrelated folder must not block valid teams.
+                continue
+    teams = sorted(teams, key=lambda item: (
+        item["profile"]["name"].casefold(),
+        item["folder"].get("name", "").casefold(),
+        item["folder"]["id"]))
+    remember_teams(user.email, teams)
+    return teams

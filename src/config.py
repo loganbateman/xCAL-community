@@ -30,8 +30,11 @@ def _default_oauth_client_file() -> Path:
     if getattr(sys, "_MEIPASS", None):
         candidates.append(Path(sys._MEIPASS) / "resources" / "oauth-client.json")
     candidates.append(APP_ROOT / "resources" / "oauth-client.json")
+    # Public users never choose or persist an OAuth client file. Maintainers
+    # inject the Community Desktop client while building the package, and the
+    # frozen app reads that bundled resource directly.
     return next((path for path in candidates if path.is_file()),
-                USER_DATA_DIR / "oauth-client.json")
+                APP_ROOT / "resources" / "oauth-client.json")
 
 
 def clean_drive_folder_id(raw: str) -> str:
@@ -60,10 +63,7 @@ def reload_environment() -> None:
     GOOGLE_DRIVE_FOLDER_ID = clean_drive_folder_id(
         os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
     )
-    GOOGLE_OAUTH_CLIENT_FILE = os.getenv(
-        "GOOGLE_OAUTH_CLIENT_FILE",
-        str(_default_oauth_client_file()),
-    )
+    GOOGLE_OAUTH_CLIENT_FILE = str(_default_oauth_client_file())
     DATA_DIR = workspace_dir(GOOGLE_DRIVE_FOLDER_ID)
     RECOVERY_MODE = os.getenv("XCAL_RECOVERY_MODE", "").strip() == "1"
     if RECOVERY_MODE:
@@ -79,7 +79,8 @@ def workspace_dir(folder_id):
 reload_environment()
 
 APP_TITLE = "xCAL - Community Preview"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.2.1"
+UPDATE_CHANNEL = "beta"
 APP_GEOMETRY = "1280x800"
 APP_MIN_SIZE = (1100, 700)
 

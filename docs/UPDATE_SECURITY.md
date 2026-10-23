@@ -1,10 +1,16 @@
 # Community update trust
 
+Community 0.2.1 follows the beta channel and reads the official repository's
+release list, allowing prereleases with numeric version tags while rejecting
+drafts. Stable builds reject prereleases. Both channels require official asset
+URLs and digests. The installer name is `xCAL-Community-Setup-VERSION.exe`;
+the former `xCAL-Setup-VERSION.exe` remains accepted for compatibility.
+
 The app checks only the HTTPS GitHub release API for
 `loganbateman/xCAL-community`. Team catalog documents, update manifests stored in
 Drive, and executable chunks in app documents are not consulted.
 
-Automatic installation requires a stable release, a correctly named installer,
+Automatic installation requires a release allowed by the app's update channel, a correctly named installer,
 an official repository release-download URL and GitHub's SHA-256 asset digest.
 Releases without a digest can be opened for manual review but cannot be installed
 through the updater. The app re-fetches release information before downloading

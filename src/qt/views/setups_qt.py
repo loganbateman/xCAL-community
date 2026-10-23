@@ -25,6 +25,10 @@ class SetupsView(QWidget):
         self._loaded = False
         self._refreshing = False
         self._refresh_pending = False
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._render)
         self._build()
 
     def _build(self):
@@ -52,7 +56,7 @@ class SetupsView(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText(
             "Search setup, driver, chassis, track\u2026")
-        self._search.textChanged.connect(self._render)
+        self._search.textChanged.connect(lambda _text: self._filter_timer.start())
         root.addWidget(self._search)
 
         self._all_scroll, self._all_lay = self._scroll_area()
@@ -223,7 +227,7 @@ class SetupsView(QWidget):
             bits.append(f"Created by {setup.created_by}")
         bits.append(
             "Waiting to sync" if getattr(setup, "_offline_pending", False)
-            else "\u2713 Synced to Supabase")
+            else "\u2713 Saved in catalog")
         sub = QLabel("  \u00b7  ".join(bits) if bits else "No details")
         sub.setWordWrap(True)
         sub.setObjectName("CardSub")

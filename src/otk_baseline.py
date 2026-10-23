@@ -22,6 +22,7 @@ _DATA = {
     "front_ride_height": "MID (middle height)",
     "ackerman": "BOTTOM HOLE",
     "axle": "N 1030 mm",
+    "cage_spring_preload": "1-2",
     "rear_ride_height": "MID (middle height)",
     "front_track_spacers": "1 large spacer (15mm)",
     "front_hub_material": "Standard OTK hubs",
@@ -39,6 +40,8 @@ _DATA = {
 }
 
 _NOTES = """OTK dry-condition starting point from the OTK Chassis Set-Up Guide.
+
+Cage spring preload: 1-2 turns, added as the team's requested starting value.
 
 Also specified by the guide but not represented by a standard xCAL field: no rear torsion bar and one supplementary seat stay on each side. Seat position depends on driver height. Tire pressures, temperatures, gearing, carburetor settings, and other unspecified values are intentionally blank.
 
@@ -78,6 +81,15 @@ def is_universal(setup) -> bool:
 def add_when_team_has_no_copy(items) -> list:
     """Expose one draft until this team saves its editable copy."""
     rows = list(items or [])
+    # Supply the newly introduced default for saved OTK templates only when
+    # the field is absent. Explicit values (including blanks) remain intact.
+    for index, setup in enumerate(rows):
+        if (isinstance(setup, Setup) and setup.is_baseline
+                and (setup.data or {}).get("_template_id") == TEMPLATE_ID
+                and "cage_spring_preload" not in (setup.data or {})):
+            setup = deepcopy(setup)
+            setup.data["cage_spring_preload"] = "1-2"
+            rows[index] = setup
     if not any(
             isinstance(item, Setup)
             and (item.data or {}).get("_template_id") == TEMPLATE_ID

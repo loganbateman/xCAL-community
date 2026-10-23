@@ -1,5 +1,9 @@
 # Local community beta — October 13, 2026
 
+Historical handoff. For the current beta use [0.2.1 release notes](RELEASE_0.2.1.md)
+and [tester instructions](BETA_QUICKSTART.md). The state below is from October 13,
+not a current OAuth or release-status report.
+
 ## Confirmed direction
 
 - `xCAL-community` remains the repository name; the app is xCAL.
@@ -7,7 +11,8 @@
 - A separate app-owned Google client/project, never the original team app's.
 - First-login Settings window: Create a Team / Join a Team.
 - Owner invitations grant named-account Google Drive Editor access after explicit
-  confirmation. A join code identifies a team but cannot grant Drive permission.
+  confirmation. Google Drive permission is the team membership proof; xCAL does
+  not use separate join codes.
 - Keep original kart fields. Add team-specific parameters in Front End, Rear End,
   Engine / Drivetrain / Carb, Tires & Wheels, and Session.
 

@@ -1,10 +1,9 @@
 # Connect any team's Google Drive
 
-This preview does not yet ship a registered community Desktop OAuth client.
-There are no shared Google passwords or embedded user tokens. Public builds can
-inject one maintainer-owned Desktop client so every user gets normal Google
-sign-in without choosing a JSON file. The client must first be created and
-published in the xCAL Community Google Cloud project.
+Public builds include the dedicated xCAL Community Desktop OAuth client so every
+user gets normal Google sign-in without choosing a JSON file. There are no shared
+Google passwords or embedded user tokens. Google verification is still pending,
+so beta users may see Google's unverified-app warning or testing limits.
 
 ## Public maintainer setup
 
@@ -30,10 +29,11 @@ For a maintainer-built beta with the Community client included:
 2. Choose **Create a Team**, sign in and choose/create a dedicated test folder.
 3. Confirm connection. xCAL initializes the catalog and restarts into that team.
 4. In Settings > Team invite the friend's named Google account with Editor access.
-5. Send the xCAL join code privately; Google's sharing email does not contain it.
+5. The teammate accepts Google's sharing email and logs in with that Google account. xCAL discovers the team automatically.
 
-Team owners do not register their own Google client or choose JSON files in the
-packaged beta. Source-checkout developer configuration is maintainer setup only.
+Team owners do not register their own Google client or choose JSON files. The
+external client file named in the build command is maintainer-only build input;
+it is never copied into the source tree or selected inside the application.
 
 ## Teammates
 

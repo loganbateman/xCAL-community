@@ -1,18 +1,19 @@
 # xCAL Community - first Windows beta
 
-This is an unsigned portable test build, not the final production installer.
+This is an unsigned beta build, available as a Windows installer and portable ZIP.
 Google OAuth verification and Windows signing approval are separate processes;
 this build does not claim either approval. Windows or Google may display warnings.
 Obtain the ZIP from the maintainer and verify its accompanying SHA-256 checksum.
 
 ## Open the app
 
-1. Extract the entire ZIP into a normal folder on your computer.
-2. Open `xCAL-community/xCAL.exe`. Keep `_internal` and all other files beside it.
-   Do not run only the EXE from inside the ZIP. Python is not required.
-3. Choose Create a Team or Join a Team. The Community Google client is included;
+1. Run the Windows installer, or extract the entire portable ZIP into a normal
+   folder. Windows may show an unsigned-app warning during this beta.
+2. Launch xCAL Community from the Start menu. For the ZIP, open
+   `xCAL-community/xCAL.exe` and keep `_internal` beside it. Python is not required.
+3. Sign in with Google, then select an existing team or create a team. The Community Google client is included;
    teammates should not create a Cloud project or select a JSON file.
-4. Sign in with your own Google account in the browser. If Google denies access
+4. Use your own Google account in the browser. If Google denies access
    because the app is testing or unverified, send the exact error to the maintainer.
 
 Your account token and workspace are saved in your Windows user's
@@ -25,20 +26,27 @@ Owner:
 
 1. Open Settings > Team and enter the friend's exact Google account email.
 2. Choose Invite teammate and review the Editor-access confirmation.
-3. Google sends a folder-sharing email. xCAL copies a separate invitation code.
-4. Send that code privately to the friend; it is not included in Google's email.
+3. Google sends the teammate a folder-sharing email.
+4. Ask the friend to sign in to Community with the invited Google account.
 
 Friend:
 
 1. Extract this same beta and open it under your own Windows account/computer.
-2. Choose Join a Team and paste the xCAL invitation code.
+2. Accept the Google Drive sharing email, then open Community.
 3. Sign in with the exact Google account the owner invited.
-4. Complete the connection confirmation and let xCAL restart.
+4. Choose the shared team from the team profiles; refresh teams if it is missing.
 5. Confirm the correct team name appears in Settings > Team.
 
-The code does not grant Drive access by itself. An existing team must be left
-before another can be joined. Leave currently disconnects that device and does
-not remove the account's Drive sharing permission.
+There is no invitation code. Google Drive sharing grants access. Switch team
+changes profiles, and Leave disconnects this device without removing the
+account's Drive permission. Sync pending edits before switching or signing out.
+
+## Updates
+
+This build follows the Community beta release channel. Use Settings > Workspace
+> Updates > Check for updates. Installer downloads are verified against GitHub's
+SHA-256 digest before launch. The first upgrade from an older preview may need
+the installer downloaded manually because earlier previews skipped beta releases.
 
 ## Two-account acceptance test
 
