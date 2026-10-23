@@ -36,20 +36,25 @@ def test_invalid_json_shape_cannot_start_google_authorization(tmp_path, monkeypa
 def test_service_account_key_is_rejected(tmp_path, monkeypatch):
     app()
     warning = Mock()
+    authorize = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
+    monkeypatch.setattr("utils.google_drive_client.authorize", authorize)
     monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, {"type": "service_account"})))
     settings = SettingsView()
     settings._show_team_profile(None)
     settings._drive_folder.setText("new-team")
     settings._save_drive_connection()
-    assert "Desktop" in warning.call_args.args[2]
+    assert "Install the latest xCAL Community" in warning.call_args.args[2]
+    authorize.assert_not_called()
     settings.deleteLater()
 
 
 def test_oauth_endpoints_must_be_google_not_arbitrary_server(tmp_path, monkeypatch):
     app()
     warning = Mock()
+    authorize = Mock()
     monkeypatch.setattr(QMessageBox, "warning", warning)
+    monkeypatch.setattr("utils.google_drive_client.authorize", authorize)
     monkeypatch.setattr(config, "GOOGLE_OAUTH_CLIENT_FILE", str(client_file(tmp_path, {"installed": {
         "client_id": "test-client", "client_secret": "synthetic-placeholder",
         "auth_uri": "https://example.invalid/auth", "token_uri": "https://example.invalid/token"}})))
@@ -57,7 +62,8 @@ def test_oauth_endpoints_must_be_google_not_arbitrary_server(tmp_path, monkeypat
     settings._show_team_profile(None)
     settings._drive_folder.setText("new-team")
     settings._save_drive_connection()
-    assert "official" in warning.call_args.args[2]
+    assert "Install the latest xCAL Community" in warning.call_args.args[2]
+    authorize.assert_not_called()
     settings.deleteLater()
 
 

@@ -1,88 +1,27 @@
-# xCAL
+# xCAL Community
 
-An open-source kart-team desktop workspace for Purdue Grand Prix and other kart
-teams. Setups, per-run changes, notes, telemetry, videos, parts, and comparisons
-stay together. Built with Python and PySide6; licensed under MIT.
+A kart-team app for setup sheets, run notes, parts and shared Google Drive files.
 
-**Community beta, not yet a production release.** This is a clean-history
-community edition derived from xCAL v0.5.36. It has no bundled team credentials,
-roster, Supabase project, access password, or private data. The original team app
-continues using Supabase and has not been migrated.
+## Get started
 
-The current unsigned Windows beta is available from
-[GitHub releases](https://github.com/loganbateman/xCAL-community/releases).
-See [tester instructions](docs/BETA_QUICKSTART.md) and
-[0.2.2 installation patch](docs/RELEASE_0.2.2.md).
+1. [Download xCAL Community](https://github.com/loganbateman/xCAL-community/releases) and run the Windows installer.
+2. Open **xCAL Community** and sign in with Google.
+3. Choose your team, or create one and invite your teammates.
 
-## Storage
+You do not need Python or any configuration files.
 
-- Google Drive holds shared setups, run notes, parts, naming settings, XRKs, and
-  videos. No Supabase account or database administration is required.
-- SQLite is a durable local cache, not a database file passed around Drive.
-- Each catalog edit is an immutable JSON change in `.xcal-catalog-v1` inside the
-  owner's selected shared Drive folder. Clients merge non-overlapping edits.
-- Conflicts preserve both changes and appear in Settings for explicit review.
-  Drive Editor permission is the access boundary; there is no central xCAL server.
-- Videos list online and download only when opened or through Download All.
-  Closing the app cancels work cooperatively; it is not a background service.
+## What you can do
 
-The journal backend is covered by fake-Drive, two-client tests. Real team-account
-OAuth, shared Drive permissions, long-running usage, and packaged builds still
-need beta validation before recommending this to other teams.
+- Build setups from a baseline and record changes between runs.
+- Track parts, revisions and stock.
+- Customize setup fields and part types.
+- Share team work through Google Drive and keep working offline.
+- Keep session notes, telemetry and videos together.
 
-## Run locally
+Use **Settings > Workspace > Updates** to check for updates.
 
-Python 3.12 is the tested version. Windows is required for Race Studio automation.
+This is an unsigned Windows beta. If Windows or Google blocks access, contact the maintainer with the message shown.
 
-```powershell
-git clone https://github.com/loganbateman/xCAL-community.git
-cd xCAL-community
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python src/main.py
-```
+[Team setup help](docs/GOOGLE_DRIVE_SETUP.md) · [Quick start](docs/BETA_QUICKSTART.md) · [Report a problem](https://github.com/loganbateman/xCAL-community/issues)
 
-The first launch asks for your Google account, then a team profile. Developers can use
-`python src/main.py --preview-local` to explore without Google credentials.
-To collaborate, follow [Google Drive setup](docs/GOOGLE_DRIVE_SETUP.md).
-Configuration and tokens are stored outside the checkout, in a separate
-`xCAL-community` user-data directory. Each selected Drive has an isolated cache.
-
-## Included features
-
-- Baseline setups, comparisons, parts inventory, and stock/revision history.
-- Run 1 as baseline; later runs hold independent setup snapshots and notes.
-- Session navigation with event names first and a Setup/Notes tab.
-- Batch telemetry uploads, individual Race Studio opening, and serialized Open All.
-- On-demand videos, offline listings, sync queue, timestamps, and editor history.
-- Exportable private workspace backups and recoverable shared-edit conflicts.
-
-XRK acquisition timestamps use AiM's optional Windows SDK. It is not redistributed
-in this repository. MOV/MP4 metadata timestamps remain available without it.
-
-## Development
-
-```powershell
-python -m pip install pytest pyflakes pyinstaller
-python -m pytest -q
-python -m pyflakes src scripts
-python scripts/check_publication.py
-.\build.ps1
-```
-
-Maintainers create the portable beta and installer with a Community-only Desktop
-OAuth client stored outside the checkout:
-
-```powershell
-.\build.ps1 -OAuthClient C:\private\community-client.json -Package -Installer
-```
-
-The packaged client identifies the application; each user's private Google token
-is created after sign-in and stays under that Windows user's local app-data folder.
-
-See [architecture and current limitations](docs/ARCHITECTURE.md),
-[production-readiness checklist](docs/PRODUCTION_READINESS.md),
-[backup and recovery](docs/BACKUP_AND_RECOVERY.md),
-[update security](docs/UPDATE_SECURITY.md),
-[contributing](CONTRIBUTING.md), and [security](SECURITY.md).
+For contributors: [development guide](docs/DEVELOPMENT.md) · [contributing](CONTRIBUTING.md) · [MIT license](LICENSE).

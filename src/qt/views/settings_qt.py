@@ -259,14 +259,22 @@ class SettingsView(QWidget):
         title.setObjectName("H2")
         layout.addWidget(title)
         client_ready = Path(config.GOOGLE_OAUTH_CLIENT_FILE).is_file()
-        hint = QLabel("Choose a separate test folder for your team's shared workspace.")
+        hint = QLabel("Choose a folder for your team's shared workspace.")
+        self._drive_folder_hint = hint
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        layout.addWidget(QLabel("Folder link or ID"))
+        self._drive_folder_label = QLabel("Folder link")
+        layout.addWidget(self._drive_folder_label)
         self._drive_folder = QLineEdit(config.GOOGLE_DRIVE_FOLDER_ID)
         self._drive_folder.setPlaceholderText("Paste a shared Drive folder URL")
         layout.addWidget(self._drive_folder)
+        self._drive_folder_link = QLabel(
+            '<a href="team-folder" style="color: #a8c7fa;">Open team folder in Google Drive ↗</a>')
+        self._drive_folder_link.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+        self._drive_folder_link.linkActivated.connect(self._open_team_drive_folder)
+        self._drive_folder_link.hide()
+        layout.addWidget(self._drive_folder_link)
         self._pick_drive = QPushButton("Choose a folder from Google Drive…")
         self._pick_drive.clicked.connect(self._pick_drive_folder)
         self._pick_drive.setEnabled(client_ready)
@@ -276,10 +284,16 @@ class SettingsView(QWidget):
         self._connect_drive.clicked.connect(self._save_drive_connection)
         layout.addWidget(self._connect_drive, 0, Qt.AlignLeft)
         help_button = QPushButton("Setup guide")
+        self._drive_setup_help = help_button
         help_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
             "https://github.com/loganbateman/xCAL-community/blob/main/docs/GOOGLE_DRIVE_SETUP.md")))
         layout.addWidget(help_button, 0, Qt.AlignLeft)
         return card
+
+    def _open_team_drive_folder(self, _link=None):
+        folder = config.clean_drive_folder_id(config.GOOGLE_DRIVE_FOLDER_ID)
+        if not config.RECOVERY_MODE and re.fullmatch(r"[A-Za-z0-9_-]+", folder):
+            QDesktopServices.openUrl(QUrl(f"https://drive.google.com/drive/folders/{folder}"))
 
     def _pick_drive_folder(self):
         if self._require_no_team():
@@ -405,12 +419,21 @@ class SettingsView(QWidget):
         self._switch_team_button.setVisible(bool(profile))
         self._invite_hint.setVisible(bool(profile))
         self._drive_folder.setReadOnly(bool(profile))
+        setup_visible = not bool(profile) and not config.RECOVERY_MODE
+        self._drive_folder.setVisible(setup_visible)
+        self._drive_folder_label.setVisible(setup_visible)
+        self._drive_folder_link.setVisible(bool(folder))
+        self._drive_setup_help.setVisible(setup_visible)
+        self._drive_folder_hint.setText(
+            "Your team's shared files." if folder else
+            "Cloud access is disabled in this recovery copy." if config.RECOVERY_MODE else
+            "Choose a folder for your team's shared workspace.")
         self._pick_drive.setVisible(not bool(profile))
         self._connect_drive.setVisible(not bool(profile))
         if profile:
             self._pending_team_name = None
             self._drive_folder.setText(config.GOOGLE_DRIVE_FOLDER_ID)
-        self._team_status.setText(f"Team: {profile['name']}" if profile else "No team profile yet. Connect a separate test folder first.")
+        self._team_status.setText(f"Team: {profile['name']}" if profile else "Sign in and choose a team to get started.")
         self._create_team.setEnabled(bool(config.GOOGLE_DRIVE_FOLDER_ID) and not profile)
         self._invite_member.setEnabled(bool(profile) and self._sharing_allowed and not self._invite_busy)
         self._invite_member.setVisible(bool(profile))
@@ -899,14 +922,18 @@ class SettingsView(QWidget):
                 raise ValueError("Paste a Google Drive folder URL or folder ID.")
             client = json.loads(client_path.read_text(encoding="utf-8-sig"))
             if not isinstance(client, dict) or not isinstance(client.get("installed"), dict):
-                raise ValueError("Choose a Google Desktop OAuth client JSON object.")
+                raise ValueError("Google sign-in is not configured correctly in this build. Install the latest xCAL Community.")
             installed = client.get("installed", {})
             if not installed.get("client_id") or not installed.get("client_secret"):
-                raise ValueError("Choose a Desktop OAuth client JSON, not a token or service-account key.")
+                raise ValueError("Google sign-in is incomplete in this build. Install the latest xCAL Community.")
             if (installed.get("auth_uri") not in ("https://accounts.google.com/o/oauth2/auth", "https://accounts.google.com/o/oauth2/v2/auth")
                     or installed.get("token_uri") != "https://oauth2.googleapis.com/token"):
-                raise ValueError("The OAuth client must use Google's official authorization and token endpoints.")
-        except (OSError, ValueError) as exc:
+                raise ValueError("Google sign-in configuration is invalid in this build. Install the latest xCAL Community.")
+        except OSError:
+            QMessageBox.warning(self, "Google sign-in unavailable",
+                                "This build is missing its Google sign-in setup. Install the latest xCAL Community; no configuration files are needed.")
+            return
+        except ValueError as exc:
             QMessageBox.warning(self, "Drive setup", str(exc))
             return
         if (config.GOOGLE_DRIVE_FOLDER_ID and folder != config.GOOGLE_DRIVE_FOLDER_ID

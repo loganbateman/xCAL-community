@@ -76,8 +76,7 @@ class TeamOnboardingDialog(QDialog):
         self.account_other.setEnabled(self.client_ready)
         if not self.client_ready:
             self.account_other.setToolTip(
-                "Changing accounts is available in the beta installer, which "
-                "includes the xCAL Community Google client")
+                "Install the latest xCAL Community to sign in with another account")
         self.account_other.clicked.connect(lambda: self._authenticate(True))
         layout.addWidget(self.account_other)
         layout.addStretch(1)
