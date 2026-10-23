@@ -37,10 +37,10 @@ try {
     } finally {
         Remove-Item Env:XCAL_PUBLIC_OAUTH_CLIENT_FILE -ErrorAction SilentlyContinue
     }
-    Write-Host 'Community app: dist/xCAL-community/xCAL.exe'
+    Write-Host 'Community app: dist/xCAL-community/xCAL Community.exe'
     $smokeArgs = @('--smoke-test')
     if ($OAuthClient) { $smokeArgs += '--expect-oauth-client' }
-    $smokeProcess = Start-Process -FilePath (Join-Path $PSScriptRoot 'dist\xCAL-community\xCAL.exe') -ArgumentList $smokeArgs -WindowStyle Hidden -PassThru
+    $smokeProcess = Start-Process -FilePath (Join-Path $PSScriptRoot 'dist\xCAL-community\xCAL Community.exe') -ArgumentList $smokeArgs -WindowStyle Hidden -PassThru
     if (-not $smokeProcess.WaitForExit(45000)) {
         $smokeProcess.Kill()
         throw 'Packaged app smoke test timed out.'

@@ -29,10 +29,13 @@ import config  # noqa: E402
 
 def main():
     setup_logging()
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ExcaliburRacing.xCALCommunity")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
-    app.setApplicationName("xCAL")
+    app.setApplicationName("xCAL Community")
     app.setOrganizationName("xCAL Community")
     install_first_click_select_all(app)
     with ExitStack() as patches:

@@ -12,7 +12,7 @@ continues using Supabase and has not been migrated.
 The current unsigned Windows beta is available from
 [GitHub releases](https://github.com/loganbateman/xCAL-community/releases).
 See [tester instructions](docs/BETA_QUICKSTART.md) and
-[0.2.1 release notes](docs/RELEASE_0.2.1.md).
+[0.2.2 installation patch](docs/RELEASE_0.2.2.md).
 
 ## Storage
 

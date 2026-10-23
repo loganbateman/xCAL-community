@@ -14,8 +14,10 @@ import config  # noqa: E402
 
 def main():
     app = ROOT / 'dist' / 'xCAL-community'
-    if not (app / 'xCAL.exe').is_file():
+    if not (app / 'xCAL Community.exe').is_file():
         raise ValueError('Build the app before packaging.')
+    if (app / 'xCAL.exe').exists():
+        raise ValueError('An ambiguous legacy xCAL.exe remains in the Community build; rebuild before packaging.')
     output = ROOT / 'dist' / 'releases'
     output.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')

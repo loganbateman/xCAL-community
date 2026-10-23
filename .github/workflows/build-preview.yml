@@ -19,7 +19,7 @@ jobs:
       - name: Test packaged startup and shutdown
         shell: pwsh
         run: |
-          $app = Start-Process -FilePath './dist/xCAL-community/xCAL.exe' -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
+          $app = Start-Process -FilePath './dist/xCAL-community/xCAL Community.exe' -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
           if ($app.ExitCode -ne 0) { throw 'Packaged smoke test failed.' }
       - uses: actions/upload-artifact@v7
         with:

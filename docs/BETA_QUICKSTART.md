@@ -10,7 +10,7 @@ Obtain the ZIP from the maintainer and verify its accompanying SHA-256 checksum.
 1. Run the Windows installer, or extract the entire portable ZIP into a normal
    folder. Windows may show an unsigned-app warning during this beta.
 2. Launch xCAL Community from the Start menu. For the ZIP, open
-   `xCAL-community/xCAL.exe` and keep `_internal` beside it. Python is not required.
+   `xCAL-community/xCAL Community.exe` and keep `_internal` beside it. Python is not required.
 3. Sign in with Google, then select an existing team or create a team. The Community Google client is included;
    teammates should not create a Cloud project or select a JSON file.
 4. Use your own Google account in the browser. If Google denies access

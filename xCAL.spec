@@ -31,6 +31,6 @@ if public_oauth_client:
         for destination, source, kind in analysis.datas
     ]
 executable = EXE(archive, analysis.scripts, [], exclude_binaries=True,
-                 name='xCAL', console=False, icon=str(root / 'src' / 'assets' / 'logo.ico'))
+                 name='xCAL Community', console=False, icon=str(root / 'src' / 'assets' / 'logo.ico'))
 collection = COLLECT(executable, analysis.binaries, analysis.datas,
                      strip=False, upx=False, name='xCAL-community')
