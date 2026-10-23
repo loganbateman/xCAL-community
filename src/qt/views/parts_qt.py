@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 import database.client as db
 import offline_store
+import otk_baseline
 from database.models import InventoryItem, InventoryRevision, Setup
 from inventory_fields import (
     BASELINE_SETUP_CATEGORY, CATEGORIES, ENTITY_CATEGORIES,
@@ -25,6 +26,7 @@ from inventory_fields import (
     fields_for_category,
 )
 from qt.workers import run_async
+from qt.responsive import FlowLayout
 from qt.widgets import (
     DatePickerEdit, ScrollSafeComboBox, ScrollSafeDoubleSpinBox,
     make_combo_searchable,
@@ -51,52 +53,10 @@ DISPLAY_VALUES = {
         STATUS_OPTIONS + CONDITION_OPTIONS + TRACKING_OPTIONS)}
 
 
-def _save_inventory_changes(
-        current: InventoryItem, target: InventoryItem) -> InventoryItem:
-    """Save all Parts changes online, or durably queue them when offline."""
-    if (getattr(current, "_offline_pending", False)
-            or str(current.id or "").startswith("offline-part-")):
-        return offline_store.queue_inventory_item(target, current)
-    definition_changed = (
-        PartMetadataDialog._definition_signature(target)
-        != PartMetadataDialog._definition_signature(current))
-    quantity_delta = round(
-        float(target.quantity) - float(current.quantity), 3)
-    archive_changed = bool(target.archived_at) != bool(current.archived_at)
-    saved = current
-    try:
-        current_entity = current.category in ENTITY_CATEGORIES
-        target_entity = target.category in ENTITY_CATEGORIES
-        quantity_first = bool(
-            quantity_delta and target_entity and not current_entity)
-        if quantity_first:
-            saved = db.adjust_inventory_stock(
-                saved.id, quantity_delta, "Quantity changed from Part Metadata")
-        if definition_changed:
-            saved = db.update_inventory_item(target)
-        if quantity_delta and not quantity_first:
-            saved = db.adjust_inventory_stock(
-                saved.id, quantity_delta, "Quantity changed from Part Metadata")
-        if archive_changed:
-            saved = db.archive_inventory_item(
-                saved.id, archived=bool(target.archived_at))
-        offline_store.cache_inventory_item(saved)
-        return saved
-    except Exception:
-        if db.check_connection():
-            raise
-        return offline_store.queue_inventory_item(target, saved)
-
-
-def _create_inventory_item(item: InventoryItem) -> InventoryItem:
-    try:
-        saved = db.create_inventory_item(item)
-        offline_store.cache_inventory_item(saved)
-        return saved
-    except Exception:
-        if db.check_connection():
-            raise
-        return offline_store.queue_inventory_item(item)
+from utils.inventory_service import (
+    save_inventory_changes as _save_inventory_changes,
+    create_inventory_item as _create_inventory_item,
+)
 
 
 TABLE_COLUMNS = (
@@ -252,7 +212,12 @@ class _BaselineCard(QFrame):
         identity.addWidget(name)
         details = " · ".join(value for value in (
             setup.chassis_name, setup.track) if value)
-        sub = QLabel(details or "Choose a Kart and Track")
+        sub = QLabel(
+            "Built-in editable universal draft · review and save"
+            if otk_baseline.is_builtin(setup)
+            else ("Universal · all drivers, karts, and tracks"
+                  if otk_baseline.is_universal(setup)
+                  else (details or "Choose a Kart and Track")))
         sub.setObjectName("Muted")
         identity.addWidget(sub)
         row.addLayout(identity, 1)
@@ -262,7 +227,9 @@ class _BaselineCard(QFrame):
                 "Part Type", BASELINE_SETUP_CATEGORY))
         updated = (setup.updated_at or setup.created_at or "")[:10] or "—"
         row.addLayout(_PartCard._metric("Updated", updated))
-        row.addLayout(_PartCard._metric("Type", "Baseline"))
+        row.addLayout(_PartCard._metric(
+            "Type", "Guide Draft" if otk_baseline.is_builtin(setup)
+            else "Baseline"))
         self.set_selected(False)
 
     def set_selected(self, selected):
@@ -1067,7 +1034,12 @@ class PartMetadataDialog(QDialog):
         revision = self._revisions.currentData()
         self._restore_btn.setEnabled(
             not self._busy and revision is not None
-            and revision.revision != self._current.revision)
+            and not self._is_current_revision(revision))
+
+    def _is_current_revision(self, revision):
+        if revision.id and self._current.revision_id:
+            return revision.id == self._current.revision_id
+        return revision.revision == self._current.revision
 
     def _begin_edit(self):
         if self._initial_loading:
@@ -1152,7 +1124,7 @@ class PartMetadataDialog(QDialog):
 
     def _restore_revision(self):
         revision = self._revisions.currentData()
-        if revision is None or revision.revision == self._current.revision:
+        if revision is None or self._is_current_revision(revision):
             return
         if QMessageBox.question(
                 self, "Restore as New Revision",
@@ -1299,10 +1271,10 @@ class PartMetadataDialog(QDialog):
             created = self._format_timestamp(revision.created_at)
             label = (
                 f"Current · Revision {revision.revision}"
-                if revision.revision == self._current.revision
+                if self._is_current_revision(revision)
                 else f"Revision {revision.revision} · {created}")
             self._revisions.addItem(label, revision)
-            if revision.revision == self._current.revision:
+            if self._is_current_revision(revision):
                 current_row = row
         self._revisions.blockSignals(False)
         if current_row >= 0:
@@ -1313,6 +1285,8 @@ class PartMetadataDialog(QDialog):
             (f"{len(revisions)} permanent revision(s). Choose an older one "
              "to compare it with the editable current values.") if revisions
             else "No revision snapshots found. Run the latest Parts migration.")
+        if self._current.merge_notice:
+            self._revision_status.setText(self._current.merge_notice.get("message", "Concurrent revisions preserved."))
         self._revision_selected(self._revisions.currentIndex())
         self._update_edit_controls()
 
@@ -1321,7 +1295,7 @@ class PartMetadataDialog(QDialog):
         if revision is None:
             self._render_comparison(None)
             return
-        if revision.revision == self._current.revision:
+        if self._is_current_revision(revision):
             self._selection_badge.setText(
                 f"Current selected · Revision {revision.revision}")
             self._render_comparison(None)
@@ -1453,9 +1427,9 @@ class PartsView(QWidget):
             header.addWidget(button)
         root.addLayout(header)
 
-        filters = QHBoxLayout()
+        filters = FlowLayout()
         self._category_filter = ScrollSafeComboBox()
-        self._category_filter.setMinimumWidth(220)
+        self._category_filter.setMinimumWidth(140)
         self._category_filter.addItem(ALL_PARTS_CATEGORY, ALL_PARTS_CATEGORY)
         for category in PARTS_CATEGORIES:
             self._category_filter.addItem(category, category)
@@ -1507,8 +1481,9 @@ class PartsView(QWidget):
         self._parts_list.itemDoubleClicked.connect(self._open_metadata)
         table_layout.addWidget(self._parts_list, 1)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         self._status = QLabel("")
+        self._status.setWordWrap(True)
         self._status.setObjectName("Muted")
         actions.addWidget(self._status, 1)
         self._history_btn = QPushButton("Stock History")
@@ -1585,6 +1560,8 @@ class PartsView(QWidget):
                 items = [item for item in offline_store.merge_pending_inventory(
                     items) if item.category == category
                     and (include_archived or not item.archived_at)]
+            if category in (BASELINE_SETUP_CATEGORY, ALL_PARTS_CATEGORY):
+                items = otk_baseline.add_when_team_has_no_copy(items)
             return generation, category, include_archived, items
 
         run_async(
@@ -1623,6 +1600,8 @@ class PartsView(QWidget):
                 cached = offline_store.load_inventory() + baselines
             else:
                 cached = offline_store.load_inventory(category)
+            if category in (BASELINE_SETUP_CATEGORY, ALL_PARTS_CATEGORY):
+                cached = otk_baseline.add_when_team_has_no_copy(cached)
             if not self._show_archived.isChecked():
                 cached = [
                     item for item in cached
@@ -1818,7 +1797,9 @@ class PartsView(QWidget):
             QMessageBox.information(self, "Select a part", "Select a part first.")
             return
         if isinstance(item, Setup):
-            self.open_baseline.emit(item)
+            self.open_baseline.emit(
+                otk_baseline.editable_copy(item)
+                if otk_baseline.is_builtin(item) else item)
             return
         PartMetadataDialog(item, self).exec()
         self.refresh()
@@ -1829,9 +1810,12 @@ class PartsView(QWidget):
             QMessageBox.information(self, "Select a part", "Select a part first.")
             return
         if isinstance(source, Setup):
-            copied = deepcopy(source)
+            copied = (
+                otk_baseline.editable_copy(source)
+                if otk_baseline.is_builtin(source) else deepcopy(source))
             copied.id = None
-            copied.name = f"{source.name or 'Baseline'} Copy"
+            if not otk_baseline.is_builtin(source):
+                copied.name = f"{source.name or 'Baseline'} Copy"
             copied.created_at = None
             copied.updated_at = None
             self.copy_baseline.emit(copied)

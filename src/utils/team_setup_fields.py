@@ -2,6 +2,7 @@
 from copy import deepcopy
 import re
 from uuid import uuid4
+from inventory_fields import CATEGORIES
 
 DOC_KEY = "team_setup_fields"
 SECTIONS = {"front": "Front End", "rear": "Rear End", "engine": "Engine / Drivetrain / Carb",
@@ -24,7 +25,7 @@ def normalize(document):
         label, unit = raw.get("label"), raw.get("unit", "")
         if not isinstance(key, str) or not re.fullmatch(r"custom_[a-f0-9]{32}", key) or key in keys:
             raise ValueError("Each custom parameter must have a unique stable field ID.")
-        if raw.get("id") != key or section not in SECTIONS or raw.get("kind") not in ("num", "text"):
+        if raw.get("id") != key or section not in SECTIONS or raw.get("kind") not in ("num", "text", "part"):
             raise ValueError("Invalid parameter section or value type.")
         if not isinstance(label, str) or not label.strip() or len(label) > 80 or not isinstance(unit, str) or len(unit) > 24:
             raise ValueError("Enter a parameter label of 1–80 characters and units of at most 24 characters.")
@@ -37,16 +38,34 @@ def normalize(document):
         if active:
             labels.add(identity)
         keys.add(key)
-        fields.append({"id": key, "key": key, "section": section, "label": label.strip(),
-                       "unit": unit.strip(), "kind": raw["kind"], "active": active})
+        field = {"id": key, "key": key, "section": section, "label": label.strip(),
+                 "unit": unit.strip(), "kind": "text" if raw["kind"] == "part" else raw["kind"], "active": active}
+        # Keep schema-1 text storage readable by older clients; category adds
+        # picker behavior without introducing an incompatible stored value type.
+        if raw["kind"] == "part" or (raw["kind"] == "text" and raw.get("category") is not None):
+            if raw.get("category") not in CATEGORIES:
+                raise ValueError("Choose an existing Parts category for this field.")
+            field["category"] = raw["category"]
+        fields.append(field)
     return {"schema": 1, "fields": fields}
 
 
-def add_parameter(document, section, label, unit="", kind="text"):
+def add_parameter(document, section, label, unit="", kind="text", category=None):
     document = normalize(document)
     key = "custom_" + uuid4().hex
     document["fields"].append({"id": key, "key": key, "section": section,
-                                "label": label, "unit": unit, "kind": kind, "active": True})
+                                "label": label, "unit": unit, "kind": kind, "active": True,
+                                "category": category if kind == "part" else None})
+    return normalize(document)
+
+
+def edit_parameter(document, key, section, label, unit="", kind="text", category=None):
+    document = normalize(document)
+    field = next((row for row in document["fields"] if row["key"] == key), None)
+    if field is None:
+        raise ValueError("Select a custom field to edit.")
+    field.update(section=section, label=label, unit=unit, kind=kind,
+                 category=category if kind == "part" else None)
     return normalize(document)
 
 
@@ -55,8 +74,18 @@ def load():
     return normalize(db.fetch_app_doc(DOC_KEY))
 
 
+def save(document):
+    import database.client as db
+    document = normalize(document)
+    db.save_app_doc(DOC_KEY, document)
+
+
 def apply(document):
     import setup_fields as sf
     document = normalize(document)
     sf.CUSTOM_FIELD_DEFINITIONS = deepcopy(document)
+    sf.INVENTORY_FIELD_CATEGORIES.clear()
+    sf.INVENTORY_FIELD_CATEGORIES.update(sf.BUILTIN_INVENTORY_FIELD_CATEGORIES)
+    sf.INVENTORY_FIELD_CATEGORIES.update({item["key"]: item["category"]
+        for item in document["fields"] if item["active"] and item.get("category")})
     return document

@@ -88,6 +88,62 @@ def test_builder_preserves_offline_legacy_kart_id(app, context):
     builder.deleteLater()
 
 
+def test_mouse_click_checklist_is_once_per_sheet_and_independent_of_runs(app, context):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    session, setup = context
+    builder = SetupBuilderView()
+    builder._folder_id, builder._folder_path = session.id, session.path
+    builder._folder_name = session.name
+    builder._setup = setup
+    builder._chassis = [Chassis(id="kart11", name="Kart 11")]
+    builder._populate(setup)
+    builder.resize(1200, 850)
+    builder._content_stack.setCurrentWidget(builder._scroll)
+    builder.show()
+    app.processEvents()
+    builder._scroll.ensureWidgetVisible(builder._maintenance)
+    app.processEvents()
+    check = builder._maintenance.findChildren(QCheckBox)[0]
+    assert check.isEnabled()
+    QTest.mouseClick(check, Qt.LeftButton, pos=QPoint(8, check.height() // 2))
+    app.processEvents()
+    records = builder._maintenance.records()
+    assert len(records) == 1
+    assert next(iter(records.values()))["checked"]
+    builder._add_run()
+    builder._add_run()
+    builder._go_to_run(0)
+    builder._go_to_run(2)
+    builder._feedback.setPlainText("Run three notes")
+    assert builder._maintenance.records() == records
+    assert builder._maintenance.findChildren(QCheckBox)[0].isChecked()
+    assert m.CHECKS_KEY not in builder._baseline_run_setup["values"]
+    for run in builder._serialized_runs():
+        assert m.CHECKS_KEY not in run
+        assert m.CHECKS_KEY not in run.get("setup", {}).get("values", {})
+    check = builder._maintenance.findChildren(QCheckBox)[0]
+    QTest.mouseClick(check, Qt.LeftButton, pos=QPoint(8, check.height() // 2))
+    app.processEvents()
+    assert not next(iter(builder._maintenance.records().values()))["checked"]
+    builder._go_to_run(0)
+    assert not builder._maintenance.findChildren(QCheckBox)[0].isChecked()
+    builder.close()
+    builder.deleteLater()
+
+
+def test_disabled_checkboxes_explain_missing_kart(app, context):
+    session, setup = context
+    setup.chassis_id = None
+    setup.chassis_name = None
+    card = MaintenanceChecklist()
+    card.refresh(m.default_policy(), setup, [session], [setup])
+    checkbox = card.findChildren(QCheckBox)[0]
+    assert not checkbox.isEnabled()
+    assert "Choose a kart" in checkbox.toolTip()
+    card.deleteLater()
+
+
 def test_checklist_saves_with_offline_setup_and_reloads(app, context, monkeypatch):
     session, setup = context
     monkeypatch.setattr("qt.views.setup_builder_qt.db.google_drive_client.audit_user_or_none", lambda **_kwargs: None)

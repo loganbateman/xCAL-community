@@ -95,8 +95,11 @@ class SyncQueueDialog(QDialog):
     def _clear(layout):
         while layout.count():
             item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
 
     def set_event(self, event):
         self._events[event["key"]] = event

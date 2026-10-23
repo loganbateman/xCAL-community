@@ -131,6 +131,7 @@ def test_folder_picker_can_create_folder_in_current_location(monkeypatch):
 
 def active_team_settings(monkeypatch):
     app()
+    monkeypatch.setattr("utils.team_access.authority", Mock(return_value={"can_manage": True}))
     profile = {"id": "team", "name": "Existing team", "folder_id": "test-folder"}
     monkeypatch.setattr("database.client.fetch_app_doc", Mock(return_value=profile))
     monkeypatch.setattr("config.GOOGLE_DRIVE_FOLDER_ID", "test-folder")
@@ -184,4 +185,87 @@ def test_leave_team_only_disconnects_local_configuration(monkeypatch, tmp_path):
     assert dotenv_values(env)["GOOGLE_DRIVE_FOLDER_ID"] == ""
     assert settings._pending_team_name is None
     restart.assert_called_once()
+    settings.deleteLater()
+
+
+def access_entry():
+    return {"id": "friend", "name": "Friend", "email": "friend@example.test",
+            "role": "writer", "type": "user", "inherited": False}
+
+
+def test_team_tab_shows_drive_access_and_refreshes(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    read = Mock(return_value=[access_entry()])
+    monkeypatch.setattr("utils.team_membership.list_team_access", read)
+    monkeypatch.setattr("qt.views.settings_qt.run_async", immediate)
+    settings._settings_tabs.setCurrentIndex(1)
+    read.assert_called_once_with("test-folder")
+    assert settings._members_table.rowCount() == 1
+    assert settings._members_table.item(0, 1).text() == "friend@example.test"
+    assert settings._members_table.item(0, 2).text() == "Editor"
+    read.return_value = []
+    settings._members_refresh.click()
+    assert settings._members_table.rowCount() == 0
+    assert "no visible" in settings._members_status.text()
+    settings.deleteLater()
+
+
+def test_access_failure_clears_previous_members(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    read = Mock(return_value=[access_entry()])
+    monkeypatch.setattr("utils.team_membership.list_team_access", read)
+    monkeypatch.setattr("qt.views.settings_qt.run_async", immediate)
+    settings._refresh_team_members()
+    read.side_effect = PermissionError("revoked")
+    settings._refresh_team_members()
+    assert settings._members_table.rowCount() == 0
+    assert settings._members_refresh.isEnabled()
+    assert "Could not load" in settings._members_status.text()
+    settings.deleteLater()
+
+
+def test_team_change_ignores_old_access_response(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    callbacks = []
+    monkeypatch.setattr("qt.views.settings_qt.run_async", lambda parent, work, **kwargs: callbacks.append(kwargs))
+    settings._refresh_team_members()
+    settings._refresh_team_members()
+    assert len(callbacks) == 1
+    settings._show_team_profile(None)
+    callbacks[0]["on_done"]([access_entry()])
+    assert settings._members_table.rowCount() == 0
+    assert settings._members_panel.isHidden()
+    settings.deleteLater()
+
+
+def test_recovery_and_no_team_do_not_load_members(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    network = Mock()
+    monkeypatch.setattr("qt.views.settings_qt.run_async", network)
+    monkeypatch.setattr("config.RECOVERY_MODE", True)
+    settings._show_team_profile(settings._team_profile)
+    settings._refresh_team_members()
+    assert settings._members_panel.isHidden()
+    monkeypatch.setattr("config.RECOVERY_MODE", False)
+    settings._show_team_profile(None)
+    settings._refresh_team_members()
+    network.assert_not_called()
+    settings.deleteLater()
+
+
+def test_invitation_controls_follow_live_sharing_permission(monkeypatch):
+    settings = active_team_settings(monkeypatch)
+    monkeypatch.setattr("utils.team_membership.list_team_access", Mock(return_value=[access_entry()]))
+    authority = Mock(return_value={"can_manage": False})
+    monkeypatch.setattr("utils.team_access.authority", authority)
+    monkeypatch.setattr("qt.views.settings_qt.run_async", immediate)
+    assert not settings._invite_member.isEnabled()
+    settings._refresh_team_members()
+    assert not settings._invite_member.isEnabled()
+    authority.return_value = {"can_manage": True}
+    settings._refresh_team_members()
+    assert settings._invite_member.isEnabled()
+    authority.side_effect = PermissionError("revoked")
+    settings._refresh_team_members()
+    assert not settings._invite_member.isEnabled()
     settings.deleteLater()

@@ -9,7 +9,7 @@ from dataclasses import replace
 from time import monotonic
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget, QSizePolicy, QLayout
 
 import config
 import cache
@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
         self._catalog_cache_last = 0.0
         self.setWindowTitle(config.APP_TITLE + (" - Offline recovery" if config.RECOVERY_MODE else ""))
         self.resize(1280, 820)
-        self.setMinimumSize(1080, 680)
+        self.setMinimumSize(640, 480)
         if config.LOGO_ICO.exists():
             self.setWindowIcon(QIcon(str(config.LOGO_ICO)))
         self.setStyleSheet(stylesheet())
@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._sidebar)
 
         self._stack = QStackedWidget()
+        self._stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         lay.addWidget(self._stack, 1)
         self.setCentralWidget(central)
 
@@ -124,6 +125,8 @@ class MainWindow(QMainWindow):
             "SetupBuilder": self._setup_builder,
         }
         for w in self._pages.values():
+            if w.layout():
+                w.layout().setSizeConstraint(QLayout.SetNoConstraint)
             self._stack.addWidget(w)
 
         self._navigate("Sessions")
@@ -137,6 +140,11 @@ class MainWindow(QMainWindow):
         self._connection_timer.timeout.connect(lambda: self._connect())
         self._connection_timer.start()
         QTimer.singleShot(3500, self._check_for_updates_on_startup)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_sidebar"):
+            self._sidebar.fit_space(self.width(), self.height())
 
     def _navigate(self, label: str):
         page = self._pages.get(label)
@@ -418,6 +426,10 @@ class MainWindow(QMainWindow):
             offline_store.pending_sync_summary(),
             supabase_connected=self._supabase_connected,
             drive_connected=self._drive_connected)
+        # The connection check itself can drain the catalog outbox, so there
+        # may be no subsequent upload job to refresh an already-open queue.
+        if self._sync_queue_dialog is not None and self._sync_queue_dialog.isVisible():
+            self._sync_queue_dialog.refresh()
 
     def _refresh_offline_catalogs(self, force=False):
         """Keep essential setup and Parts data available without user action."""

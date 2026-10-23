@@ -197,6 +197,7 @@ class SetupsView(QWidget):
 
         mid = QVBoxLayout()
         title = QLabel(setup.name or "Setup")
+        title.setWordWrap(True)
         title.setObjectName("CardTitle")
         mid.addWidget(title)
         bits = []
@@ -224,6 +225,7 @@ class SetupsView(QWidget):
             "Waiting to sync" if getattr(setup, "_offline_pending", False)
             else "\u2713 Synced to Supabase")
         sub = QLabel("  \u00b7  ".join(bits) if bits else "No details")
+        sub.setWordWrap(True)
         sub.setObjectName("CardSub")
         mid.addWidget(sub)
         lay.addLayout(mid, 1)

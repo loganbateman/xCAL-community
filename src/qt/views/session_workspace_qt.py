@@ -102,6 +102,7 @@ class SessionWorkspace(QWidget):
 
         # Left: slim session list
         left = QWidget()
+        self._session_rail = left
         left.setObjectName("SessionRail")
         left.setFixedWidth(250)
         # Target only the rail itself. A bare `background` rule cascades to
@@ -135,6 +136,11 @@ class SessionWorkspace(QWidget):
         self.detail = SessionDetailView()
         self.detail.back.connect(self.back.emit)
         lay.addWidget(self.detail, 1)
+
+    def resizeEvent(self, event):
+        if hasattr(self, "_session_rail"):
+            self._session_rail.setVisible(self.width() >= 1050)
+        super().resizeEvent(event)
 
     def open(self, session, sessions):
         """Show `session` on the right and (re)build the slim list on the left."""

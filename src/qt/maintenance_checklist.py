@@ -54,7 +54,7 @@ class MaintenanceChecklist(QFrame):
         self._next.setObjectName("Muted")
         self._next.setWordWrap(True)
         layout.addWidget(self._next)
-        hint = QLabel("Checks save with Save Setup, including the time and editor. Intervals are team-configured examples, not manufacturer service limits.")
+        hint = QLabel("One checklist for this setup sheet, shared across all runs. Checks save with Save Setup, including the time and editor. Intervals are team-configured examples, not manufacturer service limits.")
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -97,7 +97,7 @@ class MaintenanceChecklist(QFrame):
             checkbox = QCheckBox(fill(row.item["label"] + (" · Due now" if row.due else ""), width=46))
             checkbox.setChecked(row.checked)
             checkbox.setEnabled(self._state.active)
-            checkbox.setToolTip(row.item["label"])
+            checkbox.setToolTip(row.item["label"] if self._state.active else self._state.message)
             checkbox.setStyleSheet(checkbox_style(row.due))
             cell.addWidget(checkbox)
             if row.completed_at:

@@ -13,7 +13,7 @@ from datetime import datetime
 import re
 from uuid import uuid4
 
-from PySide6.QtCore import QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
 import config
 import database.client as db
 import offline_store
+import otk_baseline
+from utils.inventory_service import inventory_reference
 import maintenance
 import maintenance_store
 import cache
@@ -34,6 +36,7 @@ from utils import google_drive_client
 from qt.workers import run_async
 from qt.widgets import DatePickerEdit, ScrollSafeComboBox
 from qt.maintenance_checklist import MaintenanceChecklist
+from qt.responsive import AdaptiveGrid, FlowLayout, RunNavigationLayout
 from PIL import Image, ImageQt
 
 NONE = "\u2014 None \u2014"
@@ -491,7 +494,8 @@ class _PartPickerDialog(QDialog):
         self._refresh()
 
     def _create_part(self):
-        from qt.views.parts_qt import PartDialog, _create_inventory_item
+        from qt.views.parts_qt import PartDialog
+        from utils.inventory_service import create_inventory_item
         if self._creating:
             return
         dialog = PartDialog(self._category, parent=self)
@@ -518,7 +522,7 @@ class _PartPickerDialog(QDialog):
             self.setEnabled(True)
             QMessageBox.warning(self, "Could not create part", message)
 
-        run_async(self, lambda: _create_inventory_item(dialog.result_item),
+        run_async(self, lambda: create_inventory_item(dialog.result_item),
                   on_done=done, on_error=failed)
 
     def reject(self):
@@ -674,7 +678,7 @@ def _baseline_name(kart: str | None, track: str | None) -> str:
     scope = " · ".join(
         value.strip() for value in (kart or "", track or "")
         if value and value.strip())
-    return f"{scope} Baseline" if scope else "Baseline Setup"
+    return f"{scope} Baseline" if scope else "Universal Baseline"
 
 
 class _CopySetupDialog(QDialog):
@@ -877,6 +881,26 @@ class _KartOverlay(QWidget):
 
     def resizeEvent(self, event):  # noqa: N802 (Qt override)
         w, h = self.width(), self.height()
+        if w < 760:
+            self._image.hide()
+            columns, gap = (2 if w >= 560 else 1), 10
+            card_w = max(1, (w - gap * (columns - 1)) // columns)
+            cards = [self._cards[code] for code in ("fl", "fr", "rl", "rr")]
+            y = 0
+            for start in range(0, len(cards), columns):
+                row = cards[start:start + columns]
+                for card in row:
+                    card.resize(card_w, card.height())
+                    card.layout().activate()
+                row_h = max(card.sizeHint().height() for card in row)
+                for column, card in enumerate(row):
+                    card.setGeometry(column * (card_w + gap), y, card_w, row_h)
+                y += row_h + gap
+            self.setMinimumHeight(max(1, y - gap))
+            super().resizeEvent(event)
+            return
+        self._image.show()
+        self.setMinimumHeight(660)
         image_size = min(560, max(430, int(w * 0.52)))
         image_x = (w - image_size) // 2
         image_y = (h - image_size) // 2
@@ -915,6 +939,7 @@ class SetupBuilderView(QWidget):
         self._folder_name = ""
         self._setup: Setup | None = None
         self._is_baseline = False
+        self._universal_baseline = False
         self._detected_track: str | None = None
         self._drivers = []
         self._chassis = []
@@ -942,7 +967,7 @@ class SetupBuilderView(QWidget):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(10)
 
-        top = QHBoxLayout()
+        top = FlowLayout()
         self._back_btn = QPushButton("\u2190  Back to Session")
         self._back_btn.setObjectName("Primary")
         self._back_btn.setCursor(Qt.PointingHandCursor)
@@ -957,6 +982,7 @@ class SetupBuilderView(QWidget):
         top.addWidget(self._save_btn)
 
         self._crumb = QLabel("")
+        self._crumb.setWordWrap(True)
         self._crumb.setObjectName("Muted")
         top.addWidget(self._crumb)
         self._save_status = QLabel("")
@@ -1030,9 +1056,7 @@ class SetupBuilderView(QWidget):
 
     def _build_meta(self):
         card, lay = self._card("Setup Identity")
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(5)
+        grid = AdaptiveGrid(4, 200)
 
         self._name = QLineEdit()
         self._driver = self._identity_picker("Drivers")
@@ -1048,22 +1072,17 @@ class SetupBuilderView(QWidget):
             ("Kart / Chassis", self._chassis_cb),
             ("Track", self._track),
         ]
-        for col, (label, widget) in enumerate(widgets):
+        for label, widget in widgets:
+            cell = QVBoxLayout()
             lab = QLabel(label)
             lab.setObjectName("Muted")
-            grid.addWidget(lab, 0, col)
-            grid.addWidget(widget, 1, col)
-            grid.setColumnStretch(col, 1)
+            cell.addWidget(lab)
+            cell.addWidget(widget)
+            grid.add_cell(cell)
 
-        for i, field in enumerate(sf.IDENTITY_META_FIELDS):
-            col = i
-            lab = QLabel(field.display_label)
-            lab.setObjectName("Muted")
-            edit = self._field_widget(field)
-            self._fields[field.key] = edit
-            grid.addWidget(lab, 2, col)
-            grid.addWidget(edit, 3, col)
-        lay.addLayout(grid)
+        for field in sf.IDENTITY_META_FIELDS:
+            grid.add_cell(self._field_cell(field))
+        lay.addWidget(grid)
         self._body.addWidget(card)
 
     def _identity_picker(self, category):
@@ -1090,11 +1109,7 @@ class SetupBuilderView(QWidget):
             return
         if dialog.selected_item is not None:
             part = dialog.selected_item
-            self._set_field_text(widget, part.name, {
-                "item_id": part.id,
-                "revision": int(part.revision or 1),
-                "name": part.name,
-            })
+            self._set_field_text(widget, part.name, inventory_reference(part))
         elif dialog.custom_text is not None:
             self._set_field_text(widget, dialog.custom_text)
         self._update_dirty_styles()
@@ -1125,14 +1140,10 @@ class SetupBuilderView(QWidget):
 
     def _field_card(self, title, fields, cols) -> QFrame:
         card, lay = self._card(title)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        for i, field in enumerate(fields):
-            row, col = divmod(i, cols)
-            grid.addLayout(self._field_cell(field), row, col)
-            grid.setColumnStretch(col, 1)
-        lay.addLayout(grid)
+        grid = AdaptiveGrid(cols, 190)
+        for field in fields:
+            grid.add_cell(self._field_cell(field))
+        lay.addWidget(grid)
         return card
 
     def _corner_card(self, code) -> QFrame:
@@ -1144,14 +1155,10 @@ class SetupBuilderView(QWidget):
             f"background:{accent}; color:white; font-weight:700;"
             "padding:6px 8px; border-radius:6px;")
         lay.addWidget(title)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(7)
-        grid.setVerticalSpacing(3)
-        for i, field in enumerate(sf.corner_fields(code)):
-            row, col = divmod(i, 2)
-            grid.addLayout(self._field_cell(field), row, col)
-            grid.setColumnStretch(col, 1)
-        lay.addLayout(grid)
+        grid = AdaptiveGrid(2, 135)
+        for field in sf.corner_fields(code):
+            grid.add_cell(self._field_cell(field))
+        lay.addWidget(grid)
         return card
 
     def _field_cell(self, field) -> QVBoxLayout:
@@ -1249,11 +1256,7 @@ class SetupBuilderView(QWidget):
             return
         if dialog.selected_item is not None:
             part = dialog.selected_item
-            self._set_field_text(widget, part.name, {
-                "item_id": part.id,
-                "revision": int(part.revision or 1),
-                "name": part.name,
-            })
+            self._set_field_text(widget, part.name, inventory_reference(part))
         elif dialog.custom_text is not None:
             self._set_field_text(widget, dialog.custom_text)
         self._update_dirty_styles()
@@ -1264,38 +1267,77 @@ class SetupBuilderView(QWidget):
         items.append(part)
 
     def _build_runs(self):
-        card, lay = self._card("Runs & Session Notes")
-        nav = QHBoxLayout()
+        card, lay = self._card()
+        self._run_log_card = card
+        card.setObjectName("RunLogCard")
+        card.setStyleSheet(
+            f"QFrame#RunLogCard {{ background:{config.COLOR_CARD}; "
+            f"border:1px solid {config.COLOR_BORDER}; "
+            f"border-left:4px solid {config.COLOR_ACCENT}; border-radius:8px; }}")
+        self._run_log_heading = QLabel("Run Log")
+        self._run_log_heading.setObjectName("H2")
+        lay.addWidget(self._run_log_heading)
+        log_hint = QLabel("Record conditions, lap data and driver feedback for the selected run.")
+        log_hint.setWordWrap(True)
+        log_hint.setObjectName("Muted")
+        lay.addWidget(log_hint)
+        self._run_toolbar = QFrame()
+        self._run_toolbar.setObjectName("Card")
+        self._run_toolbar.setStyleSheet("QPushButton { padding:6px 8px; font-size:12px; }")
+        toolbar = QHBoxLayout(self._run_toolbar)
+        toolbar.setContentsMargins(12, 8, 12, 8)
+        toolbar.setSpacing(4)
+        nav = RunNavigationLayout()
         self._previous_run_btn = QPushButton("\u2190 Previous")
         self._previous_run_btn.setObjectName("Ghost")
         self._previous_run_btn.clicked.connect(self._previous_run)
         nav.addWidget(self._previous_run_btn)
         self._run_position = QLabel("Run 1 of 1")
-        self._run_position.setStyleSheet("font-weight:700;")
+        self._run_position.setStyleSheet("font-size:17px; font-weight:700;")
         self._run_position.setAlignment(Qt.AlignCenter)
         nav.addWidget(self._run_position, 1)
         self._next_run_btn = QPushButton("Next \u2192")
         self._next_run_btn.setObjectName("Ghost")
         self._next_run_btn.clicked.connect(self._next_run)
         nav.addWidget(self._next_run_btn)
+        self._run_log_btn = QPushButton("Run Log / Notes")
+        self._run_log_btn.setObjectName("Primary")
+        self._run_log_btn.setToolTip("Jump to the selected run's conditions and driver feedback")
+        self._run_log_btn.clicked.connect(self._show_run_log)
+        nav.addWidget(self._run_log_btn)
+        toolbar.addLayout(nav)
         self._add_run_btn = QPushButton("+ Add Run")
         self._add_run_btn.setObjectName("Primary")
         self._add_run_btn.clicked.connect(self._add_run)
-        nav.addWidget(self._add_run_btn)
+        nav.insertWidget(nav.indexOf(self._run_log_btn), self._add_run_btn)
         self._remove_run_btn = QPushButton("Remove Run")
         self._remove_run_btn.setObjectName("Ghost")
         self._remove_run_btn.clicked.connect(self._remove_run)
-        nav.addWidget(self._remove_run_btn)
-        lay.addLayout(nav)
-        self._run_setup_context = QLabel("Run 1 — baseline setup")
-        self._run_setup_context.setObjectName("Muted")
-        lay.addWidget(self._run_setup_context)
+        nav.insertWidget(nav.indexOf(self._run_log_btn), self._remove_run_btn)
+        self._run_setup_context = QLabel(self._run_toolbar)
+        self._run_setup_context.hide()
+        self._run_comparison_key = QFrame()
+        self._run_comparison_key.setObjectName("RunComparisonKey")
+        self._run_comparison_key.setStyleSheet(
+            f"QFrame#RunComparisonKey {{ background:{config.COLOR_SIDEBAR}; "
+            f"border:1px solid {config.COLOR_BORDER}; border-radius:6px; }}")
+        self._run_comparison_key.setToolTip(
+            "Yellow fill: differs from Baseline Run 1.\n"
+            "Red: differs from the previous run.\n"
+            "Both: yellow fill with a red border. Comparisons remain after saving.")
+        key_layout = QHBoxLayout(self._run_comparison_key)
+        key_layout.setContentsMargins(9, 5, 9, 5)
+        key_layout.setSpacing(10)
+        for text, color in (("Baseline", "#f3cf65"), ("Previous", "#ff8989")):
+            label = QLabel(text)
+            label.setStyleSheet(f"color:{color}; font-size:11px; font-weight:600; background:transparent;")
+            key_layout.addWidget(label)
+        nav.addWidget(self._run_comparison_key)
+        # Outside the scroll area: the active run and navigation stay visible.
+        self.layout().insertWidget(1, self._run_toolbar)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        for i, field in enumerate(sf.RUN_FIELDS):
-            row, col = divmod(i, 4)
+        grid = AdaptiveGrid(4, 180)
+        for field in sf.RUN_FIELDS:
             cell = QVBoxLayout()
             cell.setSpacing(2)
             label = QLabel(field.display_label)
@@ -1304,9 +1346,8 @@ class SetupBuilderView(QWidget):
             self._run_fields[field.key] = edit
             cell.addWidget(label)
             cell.addWidget(edit)
-            grid.addLayout(cell, row, col)
-            grid.setColumnStretch(col, 1)
-        lay.addLayout(grid)
+            grid.add_cell(cell)
+        lay.addWidget(grid)
 
         notes_label = QLabel("Session Notes / Driver Feedback")
         notes_label.setObjectName("Muted")
@@ -1391,6 +1432,9 @@ class SetupBuilderView(QWidget):
         for key, value in (base_values or {}).items():
             if key.startswith("custom_") and key not in self._fields:
                 self._baseline_run_setup["values"][key] = deepcopy(value)
+        for key, reference in ((base_values or {}).get("_inventory_part_revisions") or {}).items():
+            if key.startswith("custom_") and key not in self._fields:
+                self._baseline_run_setup["inventory_refs"][key] = deepcopy(reference)
         normalized = [
             _split_legacy_run_timestamp(deepcopy(run))
             for run in runs if isinstance(run, dict)
@@ -1442,15 +1486,32 @@ class SetupBuilderView(QWidget):
             self._switching_run = False
         self._update_run_navigation()
 
+        self._update_run_highlights()
+
+    def _show_run_log(self):
+        # ensureWidgetVisible only nudges a target onto the bottom edge.
+        # Center the actual notes editor in the available viewport instead.
+        self._scroll.widget().layout().activate()
+        center = self._feedback.mapTo(
+            self._scroll.widget(), QPoint(0, self._feedback.height() // 2)).y()
+        self._scroll.verticalScrollBar().setValue(
+            center - self._scroll.viewport().height() // 2)
+
     def _update_run_navigation(self):
         total = max(1, len(self._runs))
-        self._run_position.setText(f"Run {self._run_index + 1} of {total}")
+        position = f"Run {self._run_index + 1} of {total}"
+        if self._run_index == 0:
+            position += " · Baseline Run"
+        self._run_position.setText(position)
+        title = "Run 1 · Baseline Run" if self._run_index == 0 else f"Run {self._run_index + 1}"
+        self._run_log_heading.setText(f"Run Log — {title}")
         self._run_setup_context.setText(
             "Run 1 — baseline setup used by the session" if self._run_index == 0
             else f"Editing Run {self._run_index + 1} only · baseline stays unchanged")
         self._previous_run_btn.setEnabled(self._run_index > 0)
         self._next_run_btn.setEnabled(self._run_index + 1 < total)
         self._remove_run_btn.setEnabled(self._run_index > 0)
+        self._run_position.setToolTip(self._run_setup_context.text())
 
     def _go_to_run(self, index):
         if not 0 <= index < len(self._runs):
@@ -1535,6 +1596,8 @@ class SetupBuilderView(QWidget):
         self._maintenance_context = None
         self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}) if setup else {})
         self._is_baseline = bool(setup and setup.is_baseline)
+        self._universal_baseline = bool(
+            self._is_baseline and otk_baseline.is_universal(setup))
         self._initial_state = None
         self._detected_track = _detect_track(folder_name, folder_path)
         self._detected_date = _detect_date(folder_name, folder_path)
@@ -1544,8 +1607,11 @@ class SetupBuilderView(QWidget):
             else (folder_path or folder_name or ""))
         self._banner.setVisible(self._is_baseline)
         self._banner.setText(
-            "BASELINE template \u2014 saved as reusable defaults for new setups. "
-            "Choose a kart, track, or both to control where it is suggested."
+            ("UNIVERSAL BASELINE \u2014 reusable defaults for every kart and track. "
+             "Driver, kart, and track are intentionally not required."
+             if self._universal_baseline else
+             "BASELINE template \u2014 saved as reusable defaults for new setups. "
+             "Choose a kart, track, or both to control where it is suggested.")
             if self._is_baseline else "")
         self._back_btn.setText(
             "\u2190  Back to Setups" if self._is_baseline
@@ -1614,10 +1680,15 @@ class SetupBuilderView(QWidget):
                 self._options_btn, self._feedback, self._notes,
                 *self._fields.values(), *self._run_fields.values(),
                 self._previous_run_btn, self._next_run_btn,
-                self._add_run_btn, self._remove_run_btn):
+                self._add_run_btn, self._remove_run_btn, self._run_log_btn):
             widget.setEnabled(enabled)
         self._save_btn.setEnabled(enabled)
         if enabled:
+            if getattr(self, "_universal_baseline", False):
+                for widget in (self._driver, self._chassis_cb, self._track):
+                    widget.setEnabled(False)
+                    widget.setToolTip(
+                        "Universal baselines apply to every driver, kart, and track")
             self._update_run_navigation()
 
     def _identity_loaded(self, load_generation, result):
@@ -1664,6 +1735,7 @@ class SetupBuilderView(QWidget):
             "item_id": reference.get("item_id"),
             "revision": reference.get("revision"),
             "name": reference.get("name"),
+            **({"revision_id": reference["revision_id"]} if reference.get("revision_id") else {}),
         }
 
     def _fill_inventory_fields(self):
@@ -1700,17 +1772,46 @@ class SetupBuilderView(QWidget):
         self._notes.textChanged.connect(self._update_dirty_styles)
 
     @staticmethod
-    def _set_dirty(widget, dirty: bool):
-        if bool(widget.property("dirty")) == dirty:
+    def _set_field_marker(widget, name, enabled):
+        if bool(widget.property(name)) == enabled:
             return
-        widget.setProperty("dirty", dirty)
+        widget.setProperty(name, enabled)
         widget.style().unpolish(widget)
         widget.style().polish(widget)
         widget.update()
 
+    @classmethod
+    def _set_dirty(cls, widget, dirty: bool):
+        cls._set_field_marker(widget, "dirty", dirty)
+
+    def _update_run_highlights(self):
+        active = self._run_index > 0
+        baseline = self._baseline_run_setup or {}
+        previous_run = self._runs[self._run_index - 1] if active else {}
+        previous = (baseline if self._run_index <= 1 else
+                    previous_run.get(sf.RUN_SETUP_KEY, baseline)) or {}
+        values, refs = baseline.get("values", {}), baseline.get("inventory_refs", {})
+        previous_values = previous.get("values", {})
+        previous_refs = previous.get("inventory_refs", {})
+        for key, edit in self._fields.items():
+            changed = self._field_text(edit) != str(values.get(key) or "")
+            if key in sf.INVENTORY_FIELD_CATEGORIES:
+                changed = changed or getattr(edit, "_inventory_revision_ref", None) != refs.get(key)
+            self._set_field_marker(edit, "baselineChanged", active and changed)
+            changed_previous = self._field_text(edit) != str(previous_values.get(key) or "")
+            if key in sf.INVENTORY_FIELD_CATEGORIES:
+                changed_previous = changed_previous or getattr(edit, "_inventory_revision_ref", None) != previous_refs.get(key)
+            self._set_field_marker(edit, "previousRunChanged", active and changed_previous)
+        # Conditions and notes are expected to vary between runs. Comparison
+        # colors apply only to the setup/tuning controls above the run log.
+        for edit in (*self._run_fields.values(), self._feedback):
+            self._set_field_marker(edit, "baselineChanged", False)
+            self._set_field_marker(edit, "previousRunChanged", False)
+
     def _update_dirty_styles(self, *_args):
         if self._switching_run:
             return
+        self._update_run_highlights()
         state = self._initial_state
         if state is None:
             self._set_dirty(self._name, False)
@@ -1766,10 +1867,10 @@ class SetupBuilderView(QWidget):
         notes_dirty = self._notes.toPlainText() != state["notes"]
         maintenance_dirty = self._maintenance.records() != state.get(maintenance.CHECKS_KEY, {})
         self._set_dirty(self._maintenance, maintenance_dirty)
-        self._set_dirty(self._feedback, runs_dirty)
+        self._set_dirty(self._feedback, False)
         for edit in self._run_fields.values():
-            self._set_dirty(edit, runs_dirty)
-        self._set_dirty(self._notes, notes_dirty)
+            self._set_dirty(edit, False)
+        self._set_dirty(self._notes, False)
         dirty_flags.extend((runs_dirty, notes_dirty, maintenance_dirty))
         is_dirty = any(dirty_flags)
         self._set_save_status(
@@ -2005,10 +2106,6 @@ class SetupBuilderView(QWidget):
         track = self._track.currentText()
         if track in ("", NONE):
             track = self._detected_track
-        if not chassis and not track:
-            QMessageBox.information(
-                self, "No baseline", "Pick a Chassis and Track first.")
-            return
         scope = (chassis.id if chassis else None, track)
         self._prefill_btn.setEnabled(False)
 
@@ -2021,6 +2118,8 @@ class SetupBuilderView(QWidget):
                     base = db.fetch_baseline_for_chassis(chassis.id)
                 if not base and track:
                     base = db.fetch_baseline_for_track(track)
+                if not base:
+                    base = db.fetch_universal_baseline()
                 return base
             except Exception:
                 cached = [
@@ -2046,10 +2145,14 @@ class SetupBuilderView(QWidget):
                     if global_match:
                         return global_match
                 if track:
-                    return next((
+                    match = next((
                         setup for setup in cached
                         if (setup.track or "").casefold() == track.casefold()), None)
-                return None
+                    if match:
+                        return match
+                return next((
+                    setup for setup in cached
+                    if otk_baseline.is_universal(setup)), None)
 
         def _done(base):
             if generation != self._load_generation or not self.isVisible():
@@ -2195,6 +2298,8 @@ class SetupBuilderView(QWidget):
         driver_text = self._driver.currentText().strip()
         chassis_text = self._chassis_cb.currentText().strip()
         track_text = self._track.currentText().strip()
+        if self._universal_baseline:
+            driver_text = chassis_text = track_text = ""
 
         def _selected_part(items, widget, text):
             reference = self._identity_ref(widget)
@@ -2253,7 +2358,7 @@ class SetupBuilderView(QWidget):
                 self, "Choose a listed value",
                 "Choose a value from the list for: " + ", ".join(invalid) + ".")
             return
-        if (self._is_baseline and chassis is None
+        if (self._is_baseline and not self._universal_baseline and chassis is None
                 and kart_part is None and track is None and track_part is None):
             QMessageBox.information(
                 self, "Choose where this baseline applies",
@@ -2309,7 +2414,7 @@ class SetupBuilderView(QWidget):
                 data[key] = value
         inventory_refs = {
             key: deepcopy(reference)
-            for key in sf.INVENTORY_FIELD_CATEGORIES
+            for key in baseline["inventory_refs"]
             if isinstance((reference := baseline["inventory_refs"].get(key)), dict)
             and reference.get("item_id") and reference.get("revision")
         }
@@ -2317,23 +2422,11 @@ class SetupBuilderView(QWidget):
             data["_inventory_part_revisions"] = inventory_refs
         identity_refs = {}
         if driver_part is not None:
-            identity_refs["driver"] = {
-                "item_id": driver_part.id,
-                "revision": int(driver_part.revision or 1),
-                "name": driver_part.name,
-            }
+            identity_refs["driver"] = inventory_reference(driver_part)
         if kart_part is not None:
-            identity_refs["chassis"] = {
-                "item_id": kart_part.id,
-                "revision": int(kart_part.revision or 1),
-                "name": kart_part.name,
-            }
+            identity_refs["chassis"] = inventory_reference(kart_part)
         if track_part is not None:
-            identity_refs["track"] = {
-                "item_id": track_part.id,
-                "revision": int(track_part.revision or 1),
-                "name": track_part.name,
-            }
+            identity_refs["track"] = inventory_reference(track_part)
         if identity_refs:
             data["_identity_part_revisions"] = identity_refs
         runs = self._serialized_runs()

@@ -117,6 +117,34 @@ def stylesheet() -> str:
         border: 2px solid {SUCCESS};
         color: #dfffe8;
     }}
+    /* Baseline differences remain yellow after saving; green border still
+       distinguishes fields that also contain unsaved edits. */
+    QLineEdit[baselineChanged="true"], QComboBox[baselineChanged="true"],
+    QPlainTextEdit[baselineChanged="true"] {{
+        background-color: #493e20;
+        border: 2px solid #d9b64d;
+        color: #fff1b8;
+    }}
+    QLineEdit[baselineChanged="true"][dirty="true"],
+    QComboBox[baselineChanged="true"][dirty="true"],
+    QPlainTextEdit[baselineChanged="true"][dirty="true"] {{
+        border: 2px solid {SUCCESS};
+    }}
+    /* Previous-run differences are red. Preserve yellow fill when both
+       comparisons differ; unsaved state remains visible in the save status. */
+    QLineEdit[previousRunChanged="true"], QComboBox[previousRunChanged="true"],
+    QPlainTextEdit[previousRunChanged="true"] {{
+        background-color: #4c252b;
+        border: 2px solid #ed7373;
+        color: #ffe6e6;
+    }}
+    QLineEdit[baselineChanged="true"][previousRunChanged="true"],
+    QComboBox[baselineChanged="true"][previousRunChanged="true"],
+    QPlainTextEdit[baselineChanged="true"][previousRunChanged="true"] {{
+        background-color: #493e20;
+        border: 2px solid #ed7373;
+        color: #fff1b8;
+    }}
     QLineEdit[metadataReadOnly="true"],
     QComboBox[metadataReadOnly="true"],
     QPlainTextEdit[metadataReadOnly="true"] {{

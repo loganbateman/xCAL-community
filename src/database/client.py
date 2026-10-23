@@ -317,6 +317,10 @@ def update_inventory_item(item: InventoryItem) -> InventoryItem:
     payload.pop("created_by", None)
     payload.pop("revision", None)
     payload["updated_by"] = google_drive_client.audit_identity()
+    if hasattr(item, "_edit_base"):
+        base = item._edit_base
+        return InventoryItem.from_dict(get_client().save_part_edit(
+            item.id, payload, revision_id=base.revision_id, revision=base.revision))
     res = (get_client().table("inventory_items")
            .update(payload)
            .eq("id", item.id)
@@ -337,7 +341,10 @@ def fetch_inventory_revisions(item_id: str) -> List[InventoryRevision]:
            .eq("item_id", item_id)
            .order("revision", desc=True)
            .execute())
-    return [InventoryRevision.from_dict(row) for row in (res.data or [])]
+    revisions = [InventoryRevision.from_dict(row) for row in (res.data or [])]
+    current = fetch_inventory_item(item_id)
+    return sorted(revisions, key=lambda row: (bool(current and row.id == current.revision_id),
+                  row.created_at or "", row.id or ""), reverse=True)
 
 
 def archive_inventory_item(
@@ -719,6 +726,20 @@ def fetch_baseline_for_chassis(chassis_id: str) -> Optional[Setup]:
                  if _track_scope_key(row.get("track")) is None), None)
 
 
+def fetch_universal_baseline() -> Optional[Setup]:
+    """Most recent baseline intentionally applying to every kart and track."""
+    res = (get_client().table("setups")
+           .select("*, drivers(name), chassis(name)")
+           .eq("is_baseline", True)
+           .is_("chassis_id", "null")
+           .order("updated_at", desc=True)
+           .execute())
+    return next((Setup.from_dict(row) for row in (res.data or [])
+                 if _track_scope_key(row.get("track")) is None
+                 and bool((row.get("extra_fields") or {}).get(
+                     "_universal_baseline"))), None)
+
+
 def fetch_setup_folder_counts() -> dict:
     """Map drive_folder_id -> number of setups (for explorer badges)."""
     counts, _summaries = fetch_setup_folder_overview()
@@ -789,8 +810,6 @@ def fetch_conflicting_baseline(
         exclude_id: Optional[str] = None) -> Optional[Setup]:
     """Find another baseline with the exact same kart/track applicability."""
     track_key = _track_scope_key(track)
-    if not chassis_id and track_key is None:
-        return None
     query = (get_client().table("setups")
              .select("*, drivers(name), chassis(name)")
              .eq("is_baseline", True))

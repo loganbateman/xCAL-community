@@ -37,16 +37,17 @@ def test_invalid_invite_rejected_before_google_calls(code, monkeypatch):
 
 def test_existing_editor_who_is_not_owner_cannot_invite(owner, monkeypatch):
     monkeypatch.setattr(team.drive, "current_user", lambda **_kwargs: GoogleUser("Editor", "editor@example.test"))
+    monkeypatch.setattr(team.drive, "folder_details", lambda _id: {"capabilities": {"canShare": False}})
     service = Mock()
     monkeypatch.setattr(team.drive, "_worker_service", lambda: service)
-    with pytest.raises(PermissionError, match="owner"):
+    with pytest.raises(PermissionError, match="permission"):
         team.invite_member("new@example.test")
     service.permissions.assert_not_called()
 
 
 def test_drive_sharing_capability_required_even_for_owner(owner, monkeypatch):
     monkeypatch.setattr(team.drive, "folder_details", lambda _id: {"id": "test-folder", "capabilities": {"canShare": False}})
-    with pytest.raises(PermissionError, match="cannot invite"):
+    with pytest.raises(PermissionError, match="permission"):
         team.invite_member("new@example.test")
 
 
@@ -158,3 +159,43 @@ def test_wrong_team_code_is_rejected_even_with_drive_editor_access(owner, monkey
     monkeypatch.setattr(team, "DriveJournal", Mock())
     with pytest.raises(ValueError, match="does not match"):
         team.validate_join(team.encode_invite(profile()))
+
+
+def test_access_list_is_read_only_paginated_and_excludes_deleted_expired(monkeypatch):
+    service = Mock()
+    read = Mock(return_value=service)
+    monkeypatch.setattr(team.drive, "_service", read)
+    service.permissions.return_value.list.return_value.execute.side_effect = [
+        {"nextPageToken": "page2", "permissions": [
+            {"id": "editor", "type": "user", "displayName": "Friend", "emailAddress": "friend@example.test", "role": "writer"},
+            {"id": "removed", "type": "user", "role": "writer", "deleted": True},
+            {"id": "expired", "type": "user", "role": "reader", "expirationTime": "2000-01-01T00:00:00Z"}]},
+        {"permissions": [
+            {"id": "owner", "type": "user", "emailAddress": "owner@example.test", "role": "owner"},
+            {"id": "group", "type": "group", "emailAddress": "team@example.test", "role": "reader",
+             "permissionDetails": [{"inherited": True}]},
+            {"id": "link", "type": "anyone", "role": "reader"}]}]
+    result = team.list_team_access("test-folder")
+    assert [row["id"] for row in result] == ["owner", "editor", "link", "group"]
+    assert next(row for row in result if row["id"] == "group")["inherited"]
+    read.assert_called_once_with(interactive=False)
+    assert service.permissions.return_value.list.call_args.kwargs["pageToken"] == "page2"
+    service.permissions.return_value.create.assert_not_called()
+    service.permissions.return_value.update.assert_not_called()
+    service.permissions.return_value.delete.assert_not_called()
+
+
+def test_access_list_does_not_require_owner_privileges(owner, monkeypatch):
+    monkeypatch.setattr(team.drive, "current_user", lambda **kwargs: GoogleUser("Editor", "editor@example.test"))
+    service = Mock()
+    service.permissions.return_value.list.return_value.execute.return_value = {"permissions": []}
+    monkeypatch.setattr(team.drive, "_service", Mock(return_value=service))
+    assert team.list_team_access("test-folder") == []
+
+
+def test_access_list_rejects_invalid_folder_before_network(monkeypatch):
+    service = Mock()
+    monkeypatch.setattr(team.drive, "_service", service)
+    with pytest.raises(ValueError):
+        team.list_team_access("bad/folder")
+    service.assert_not_called()

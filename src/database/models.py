@@ -110,6 +110,8 @@ class InventoryItem:
     updated_at: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
+    revision_id: Optional[str] = None
+    merge_notice: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "InventoryItem":
@@ -136,6 +138,8 @@ class InventoryItem:
             updated_at=d.get("updated_at"),
             created_by=d.get("created_by"),
             updated_by=d.get("updated_by"),
+            revision_id=d.get("revision_id"),
+            merge_notice=dict(d.get("_merge_notice") or {}),
         )
 
     def to_dict(self, include_nulls: bool = False) -> dict:
@@ -172,11 +176,13 @@ class InventoryRevision:
     snapshot: dict = field(default_factory=dict)
     created_by: Optional[str] = None
     created_at: Optional[str] = None
+    id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "InventoryRevision":
         return cls(
             item_id=d.get("item_id"),
+            id=d.get("id") or (d.get("snapshot") or {}).get("revision_id"),
             revision=int(d.get("revision") or 1),
             snapshot=dict(d.get("snapshot") or {}),
             created_by=d.get("created_by"),

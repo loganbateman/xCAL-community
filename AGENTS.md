@@ -1,6 +1,8 @@
 # xCAL Community working context
 
 - Work in this repository, not the original sibling `../xCAL` team app.
+- Default every request to Community only. Edit regular `../xCAL` only when the
+  user explicitly asks for it in that request.
 - The original team app keeps Supabase. This community app uses its own local
   workspace and a team-owned Google Drive journal; do not migrate production data.
 - Authentication must be fully separate. Never borrow the original app's OAuth

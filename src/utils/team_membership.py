@@ -19,6 +19,51 @@ TEAM_DOC = "team_profile"
 PREFIX = "xcal-team-v1:"
 
 
+def list_team_access(folder_id=None):
+    """Read the folder ACL, not online presence or individual group membership.
+
+    Works for members allowed to read sharing details; no ownership or permission
+    mutation is required. Missing auth must not open a browser on tab selection.
+    """
+    folder_id = folder_id or drive.root_folder_id()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
+        raise ValueError("Invalid team Drive folder.")
+    service = drive._service(interactive=False)
+    entries, token = {}, None
+    now = datetime.now(timezone.utc)
+    while True:
+        response = service.permissions().list(
+            fileId=folder_id, pageSize=100, pageToken=token,
+            fields="nextPageToken,permissions(id,type,displayName,emailAddress,domain,role,deleted,expirationTime,pendingOwner,permissionDetails(inherited))",
+            supportsAllDrives=True).execute()
+        for permission in response.get("permissions", []):
+            if permission.get("deleted"):
+                continue
+            expiration = permission.get("expirationTime")
+            if expiration:
+                try:
+                    if datetime.fromisoformat(expiration.replace("Z", "+00:00")) <= now:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            kind = permission.get("type", "unknown")
+            email = permission.get("emailAddress") or ""
+            name = permission.get("displayName") or email or permission.get("domain") or "Identity unavailable"
+            if kind == "anyone":
+                name = "Anyone with access to this link"
+            entries[permission["id"]] = {
+                "id": permission["id"], "name": name, "email": email,
+                "role": permission.get("role", "unknown"), "type": kind,
+                "pending_owner": bool(permission.get("pendingOwner")),
+                "inherited": any(detail.get("inherited") for detail in permission.get("permissionDetails", [])),
+            }
+        token = response.get("nextPageToken")
+        if not token:
+            break
+    order = {"owner": 0, "organizer": 1, "fileOrganizer": 2, "writer": 3, "commenter": 4, "reader": 5}
+    return sorted(entries.values(), key=lambda entry: (order.get(entry["role"], 6), entry["name"].casefold(), entry["email"].casefold()))
+
+
 def _owner_context(folder_id=None):
     folder_id = folder_id or drive.root_folder_id()
     user = drive.current_user(interactive=False, refresh=True, allow_cached=False)
@@ -102,7 +147,8 @@ def invite_member(email):
     email = (email or "").strip().casefold()
     if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise ValueError("Enter the teammate's Google account email address.")
-    folder_id, _user, _folder = _owner_context()
+    from utils.team_access import authority
+    folder_id = authority(require_manage=True)["folder_id"]
     profile = db.fetch_app_doc(TEAM_DOC)
     if not profile or profile.get("folder_id") != folder_id:
         raise ValueError("Create a team profile for this folder first.")
@@ -139,7 +185,7 @@ def validate_join(code):
         raise PermissionError("Ask the team owner to invite this Google account with Editor access first.")
     with TemporaryDirectory(prefix="xcal-team-join-") as temporary:
         store = DriveStore(Path(temporary) / "preview.sqlite3", DriveJournal(invite["folder_id"]))
-        store.sync()  # Empty outbox: only reads the existing journal.
+        store.sync(read_only=True)  # Never publish generated revisions during join validation.
         rows = store.table("app_docs").select("data").eq("key", TEAM_DOC).execute().data
         profile = rows[0]["data"] if rows else None
     if not profile or profile.get("id") != invite["team_id"] or profile.get("folder_id") != folder["id"]:

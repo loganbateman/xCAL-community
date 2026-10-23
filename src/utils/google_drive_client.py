@@ -349,7 +349,7 @@ def folder_details(folder_id) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_-]+", folder_id):
         raise GoogleDriveError("Invalid Drive folder ID.")
     folder = _worker_service().files().get(
-        fileId=folder_id, fields="id,name,mimeType,webViewLink,driveId,owners(emailAddress),capabilities(canAddChildren,canShare)",
+        fileId=folder_id, fields="id,name,mimeType,webViewLink,driveId,writersCanShare,owners(emailAddress),capabilities(canAddChildren,canShare)",
         supportsAllDrives=True).execute()
     if folder.get("mimeType") != FOLDER_MIME:
         raise GoogleDriveError("Choose a Google Drive folder, not a file.")

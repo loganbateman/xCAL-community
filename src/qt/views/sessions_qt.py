@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QDialog, QFormLayout, QDialogButtonBox)
 
 import config
+from qt.responsive import FlowLayout
 import cache
 import session_types
 import database.client as db
@@ -201,6 +202,7 @@ class SessionCard(QFrame):
         mid = QVBoxLayout()
         mid.setSpacing(2)
         title = QLabel(label or s.name)
+        title.setWordWrap(True)
         title.setObjectName("CardTitle")
         mid.addWidget(title)
 
@@ -216,6 +218,7 @@ class SessionCard(QFrame):
             bits += [f"{x}" for x in drivers[:2]]
             bits += [f"{k}" for k in karts[:3]]
         sub = QLabel("   ".join(bits) if bits else s.path)
+        sub.setWordWrap(True)
         sub.setObjectName("CardSub")
         mid.addWidget(sub)
         lay.addLayout(mid, 1)
@@ -267,7 +270,7 @@ class SessionsView(QWidget):
         root.setSpacing(12)
 
         # Header
-        header = QHBoxLayout()
+        header = FlowLayout()
         h1 = QLabel("Sessions")
         h1.setObjectName("H1")
         header.addWidget(h1)
@@ -301,15 +304,15 @@ class SessionsView(QWidget):
         root.addWidget(self._hero)
 
         # Toolbar
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search sessions, drivers, tracks\u2026")
-        self._search.setFixedWidth(300)
+        self._search.setMinimumWidth(160)
         self._search.textChanged.connect(self._render)
         bar.addWidget(self._search)
         self._season = make_combo_searchable(QComboBox())
         self._season.addItem("All seasons")
-        self._season.setFixedWidth(180)
+        self._season.setMinimumWidth(140)
         self._season.currentIndexChanged.connect(self._render)
         bar.addWidget(self._season)
         self._type_filter = QComboBox()
@@ -602,10 +605,12 @@ class SessionsView(QWidget):
         tag.setObjectName("Accent")
         left.addWidget(tag)
         title = QLabel(f"{d}  \u2014  {label or latest.name}")
+        title.setWordWrap(True)
         title.setObjectName("H2")
         left.addWidget(title)
         bits = identity_labels[:4] + [f"{len(latest.xrks)} files"]
         sub = QLabel("   ".join(bits))
+        sub.setWordWrap(True)
         sub.setObjectName("Muted")
         left.addWidget(sub)
         self._hero_lay.addLayout(left, 1)

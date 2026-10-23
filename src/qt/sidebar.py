@@ -56,6 +56,8 @@ class Sidebar(QFrame):
         self._buttons: dict[str, QPushButton] = {}
         self._icons: dict[str, QIcon] = {}
         self._collapsed = False
+        self._compact_space = False
+        self._preferred_collapsed = False
         self._build()
 
     def _build(self):
@@ -142,7 +144,15 @@ class Sidebar(QFrame):
     # ── Collapse / expand ─────────────────────────────────────────────────────
 
     def toggle(self):
-        self.set_collapsed(not self._collapsed)
+        if self._compact_space:
+            return
+        self._preferred_collapsed = not self._collapsed
+        self.set_collapsed(self._preferred_collapsed)
+
+    def fit_space(self, width, height):
+        self._compact_space = width < 1100 or height < 600
+        self.set_collapsed(self._compact_space or self._preferred_collapsed)
+        self._toggle.setToolTip("Widen the window to expand navigation" if self._compact_space else "Collapse / expand navigation")
 
     def set_collapsed(self, collapsed: bool):
         if collapsed == self._collapsed:

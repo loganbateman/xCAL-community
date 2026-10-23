@@ -38,6 +38,24 @@ class BaselineClientTests(unittest.TestCase):
         self.assertEqual(result.id, "other-baseline")
         query.neq.assert_called_once_with("id", "current-id")
 
+    @patch("database.client.get_client")
+    def test_universal_baseline_lookup_requires_explicit_marker(self, get_client):
+        query = MagicMock()
+        get_client.return_value.table.return_value = query
+        for method in ("select", "eq", "is_", "order"):
+            getattr(query, method).return_value = query
+        query.execute.return_value.data = [
+            {"id": "legacy-empty", "is_baseline": True,
+             "chassis_id": None, "track": None, "extra_fields": {}},
+            {"id": "universal", "is_baseline": True,
+             "chassis_id": None, "track": None,
+             "extra_fields": {"_universal_baseline": True}},
+        ]
+
+        result = db.fetch_universal_baseline()
+
+        self.assertEqual(result.id, "universal")
+
     def test_setup_full_update_payload_preserves_explicit_nulls(self):
         payload = Setup(id="setup-id", name="Test").to_dict(
             include_nulls=True)

@@ -7,7 +7,7 @@ every differing field highlighted.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGridLayout,
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QSizePolicy,
                                QLabel, QComboBox, QFrame, QScrollArea)
 
 import config
@@ -78,6 +78,7 @@ class _Slot:
 
         self.combo = make_combo_searchable(
             _ReadableSetupCombo(), placeholder="Loading setups\u2026")
+        self.combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.combo.currentIndexChanged.connect(self._changed)
         lay.addWidget(self.combo)
 
@@ -139,6 +140,7 @@ class CompareView(QWidget):
         hint = QLabel("Pick any two setups \u2014 from any session \u2014 to see what "
                       "changed. Type to filter or use the caret to browse.")
         hint.setObjectName("Muted")
+        hint.setWordWrap(True)
         root.addWidget(hint)
 
         self._slots_grid = QGridLayout()
@@ -245,6 +247,7 @@ class CompareView(QWidget):
                 item.widget().deleteLater()
 
         guide = QFrame()
+        self._selection_guide = guide
         guide.setObjectName("Card")
         guide_lay = QVBoxLayout(guide)
         guide_lay.setContentsMargins(12, 10, 12, 12)
@@ -268,6 +271,32 @@ class CompareView(QWidget):
         self._slots_grid.addWidget(guide, 0, 0)
         self._slots_grid.addWidget(self._a.frame, 0, 1)
         self._slots_grid.addWidget(self._b.frame, 0, 2)
+        self._compact_slots = None
+        self._fit_slots()
+
+    def _fit_slots(self):
+        if not hasattr(self, "_a"):
+            return
+        compact = self.width() < 900
+        if compact == self._compact_slots:
+            return
+        for widget in (self._selection_guide, self._a.frame, self._b.frame):
+            self._slots_grid.removeWidget(widget)
+        self._selection_guide.setVisible(not compact)
+        if compact:
+            self._slots_grid.addWidget(self._a.frame, 0, 0)
+            self._slots_grid.addWidget(self._b.frame, 0, 1)
+        else:
+            self._slots_grid.addWidget(self._selection_guide, 0, 0)
+            self._slots_grid.addWidget(self._a.frame, 0, 1)
+            self._slots_grid.addWidget(self._b.frame, 0, 2)
+        for column, stretch in enumerate((1, 1, 0) if compact else (3, 2, 2)):
+            self._slots_grid.setColumnStretch(column, stretch)
+        self._compact_slots = compact
+
+    def resizeEvent(self, event):
+        self._fit_slots()
+        super().resizeEvent(event)
 
     # ── Diff ──────────────────────────────────────────────────────────────────
 
@@ -342,6 +371,7 @@ class CompareView(QWidget):
         grid.setColumnStretch(2, 2)
 
         fl = QLabel(field)
+        fl.setWordWrap(True)
         fl.setStyleSheet("font-weight:700;" if (bold or header)
                          else f"color:{config.COLOR_TEXT_MUTED};")
         grid.addWidget(fl, 0, 0)

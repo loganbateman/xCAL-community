@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QDialogButtonBox, QLineEdit, QListWidget,
                                QListWidgetItem, QAbstractItemView, QInputDialog)
 import config
+from qt.responsive import FlowLayout
 import session_types
 import database.client as db
 import offline_store
@@ -263,13 +264,14 @@ class SessionDetailView(QWidget):
         root.setContentsMargins(28, 20, 28, 20)
         root.setSpacing(8)
 
-        top = QHBoxLayout()
+        top = FlowLayout()
         backb = QPushButton("\u2190  Back to Sessions")
         backb.setObjectName("Primary")
         backb.setCursor(Qt.PointingHandCursor)
         backb.clicked.connect(self.back.emit)
         top.addWidget(backb)
         self._crumb = QLabel("")
+        self._crumb.setWordWrap(True)
         self._crumb.setObjectName("Muted")
         top.addWidget(self._crumb)
         top.addStretch(1)
@@ -298,6 +300,7 @@ class SessionDetailView(QWidget):
         root.addLayout(top)
 
         self._title = QLabel("Session")
+        self._title.setWordWrap(True)
         self._title.setObjectName("H1")
         root.addWidget(self._title)
 
@@ -314,7 +317,7 @@ class SessionDetailView(QWidget):
         setup_tab = QWidget()
         st = QVBoxLayout(setup_tab)
         st.setContentsMargins(14, 12, 14, 12)
-        sh = QHBoxLayout()
+        sh = FlowLayout()
         sl = QLabel("Setups")
         sl.setObjectName("H2")
         sh.addWidget(sl)
@@ -334,7 +337,7 @@ class SessionDetailView(QWidget):
         data_tab = QWidget()
         dt = QVBoxLayout(data_tab)
         dt.setContentsMargins(14, 12, 14, 12)
-        dh = QHBoxLayout()
+        dh = FlowLayout()
         dl = QLabel("Session Data")
         dl.setObjectName("H2")
         dh.addWidget(dl)
@@ -391,7 +394,7 @@ class SessionDetailView(QWidget):
         video_tab = QWidget()
         vt = QVBoxLayout(video_tab)
         vt.setContentsMargins(14, 12, 14, 12)
-        vh = QHBoxLayout()
+        vh = FlowLayout()
         vl = QLabel("Videos")
         vl.setObjectName("H2")
         vh.addWidget(vl)

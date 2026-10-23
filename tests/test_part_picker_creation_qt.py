@@ -16,7 +16,7 @@ def test_create_in_branch_saves_and_selects_new_part(monkeypatch):
     factory = Mock(return_value=editor)
     save = Mock(return_value=part)
     monkeypatch.setattr("qt.views.parts_qt.PartDialog", factory)
-    monkeypatch.setattr("qt.views.parts_qt._create_inventory_item", save)
+    monkeypatch.setattr("utils.inventory_service.create_inventory_item", save)
     monkeypatch.setattr("qt.views.setup_builder_qt.run_async",
                         lambda parent, work, on_done, on_error: on_done(work()))
     picker = _PartPickerDialog("Cage", [])
@@ -42,7 +42,7 @@ def test_cancelled_part_creation_does_not_save(monkeypatch):
     editor.exec.return_value = QDialog.Rejected
     monkeypatch.setattr("qt.views.parts_qt.PartDialog", Mock(return_value=editor))
     save = Mock()
-    monkeypatch.setattr("qt.views.parts_qt._create_inventory_item", save)
+    monkeypatch.setattr("utils.inventory_service.create_inventory_item", save)
     picker = _PartPickerDialog("Cage", [])
     picker._create_part()
     save.assert_not_called()
@@ -84,7 +84,7 @@ def test_new_identity_parts_can_save_via_shortcut_without_reopening(monkeypatch,
         result.exec.return_value = QDialog.Accepted
         return result
     monkeypatch.setattr("qt.views.parts_qt.PartDialog", editor)
-    monkeypatch.setattr("qt.views.parts_qt._create_inventory_item", lambda part: part)
+    monkeypatch.setattr("utils.inventory_service.create_inventory_item", lambda part: part)
     def create_and_select(picker):
         picker._create_part()
         picker.accept()

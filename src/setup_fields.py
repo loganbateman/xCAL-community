@@ -64,7 +64,6 @@ FRONT_FIELDS = [
     Field("torsion_bar", "Front Torsion Bar", "", "text"),
     Field("front_ride_height", "Front Ride Height", "", "text"),
     Field("ackerman", "Ackerman", "", "text"),
-    Field("front_tire_pressure", "Front Tire Pressure", "psi"),
     Field("front_weight_pct", "Front Weight", "%"),
 ]
 
@@ -73,7 +72,6 @@ REAR_FIELDS = [
     Field("axle", "Axle", "", "text"),
     Field("cage", "Cage", "", "text"),
     Field("rear_ride_height", "Rear Ride Height", "", "text"),
-    Field("rear_tire_pressure", "Rear Tire Pressure", "psi"),
 ]
 
 # ── Engine / drivetrain / carb (centre) ──────────────────────────────────────
@@ -208,6 +206,7 @@ INVENTORY_FIELD_CATEGORIES = {
 }
 
 
+BUILTIN_INVENTORY_FIELD_CATEGORIES = dict(INVENTORY_FIELD_CATEGORIES)
 CUSTOM_FIELD_DEFINITIONS = {"schema": 1, "fields": []}
 
 

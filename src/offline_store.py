@@ -257,6 +257,8 @@ def _inventory_payload(item: InventoryItem) -> dict:
         "revision": item.revision,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "revision_id": item.revision_id,
+        "_merge_notice": item.merge_notice,
     })
     return payload
 

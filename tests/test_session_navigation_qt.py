@@ -339,6 +339,8 @@ def test_manage_data_files_uses_checkboxes_and_preserves_nodes():
 def test_sync_queue_shows_destination_and_transfer_progress(
         tmp_path, monkeypatch):
     _app()
+    # Only the fixture's upload belongs here, never the user's live catalog queue.
+    monkeypatch.setattr("database.client.get_client", lambda: SimpleNamespace(queue_items=lambda: []))
     monkeypatch.setattr(
         offline_store, "OFFLINE_DB_PATH", tmp_path / "offline.db")
     monkeypatch.setattr(

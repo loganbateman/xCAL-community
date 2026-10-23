@@ -15,6 +15,13 @@ Keep production work isolated from the original xCAL app and its credentials.
 
 ## P0: block public release until resolved
 
+October 22 collaboration update: stable part revision IDs, preserved concurrent
+source/merged revisions, deterministic baseline identities, explicit legacy
+baseline consolidation and live-capability-based sharing controls are implemented
+and regression-tested locally. Shared inventory persistence now lives outside the
+Parts view. See [team collaboration](TEAM_COLLABORATION.md) for semantics and live
+checks. The release gates below remain open until real-machine evidence exists.
+
 Progress on update/recovery work (October 19): team-document update metadata and
 executable chunks have been removed. The updater requires an official GitHub
 release digest and rechecks bytes before launch. Atomic token, identity and
@@ -40,11 +47,11 @@ The broader release gates below still require real-machine and multi-user eviden
    this device and preserves Drive permissions; document this distinction and
    decide whether actual membership removal is required. Verify no cross-team
    workspace exposure, no lost pending edits, and correct attribution.
-4. [ ] **Resolve distributed identity limits.** `database/drive_store.py` merges
-   events, but numeric part revisions can collide across clients and independent
-   baseline creation lacks server uniqueness. Introduce stable revision IDs and
-   duplicate resolution with backward-compatible migration tests before relying
-   on part links as durable historical references.
+4. [ ] **Validate distributed identity safeguards live.** Stable part revision
+   IDs and setup references, deterministic new baseline IDs and explicit legacy
+   duplicate consolidation now have regression coverage. Validate on two real
+   devices, including old numeric-only references and offline fallback queues,
+   before relying on them as durable historical references in a public release.
 5. [ ] **Validate recovery and durability.** Test crash/restart during catalog
    initialization, upload, conflict resolution and config/token persistence;
    permission loss mid-sync; and export/restore on a clean machine. A documented,

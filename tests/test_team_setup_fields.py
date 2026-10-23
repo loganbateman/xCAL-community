@@ -14,7 +14,7 @@ from utils import team_setup_fields as fields
 def restore_fields():
     original = deepcopy(sf.CUSTOM_FIELD_DEFINITIONS)
     yield
-    sf.CUSTOM_FIELD_DEFINITIONS = original
+    fields.apply(original)
 
 
 def app():
@@ -118,3 +118,97 @@ def test_new_sheet_does_not_inherit_hidden_parameters_from_previous_sheet():
     builder._populate(builder._setup)
     assert key not in builder._baseline_run_setup["values"]
     builder.deleteLater()
+
+def test_editing_parameter_preserves_storage_key_and_rejects_duplicates():
+    document = fields.add_parameter(None, "front", "Original", "mm", "num")
+    key = document["fields"][0]["key"]
+    document = fields.edit_parameter(document, key, "rear", "Renamed", "in", "num")
+    assert document["fields"][0]["key"] == key
+    assert document["fields"][0]["section"] == "rear"
+    assert document["fields"][0]["label"] == "Renamed"
+    document = fields.add_parameter(document, "rear", "Other")
+    with pytest.raises(ValueError, match="different labels"):
+        fields.edit_parameter(document, key, "rear", "Other")
+    assert document["fields"][0]["label"] == "Renamed"
+
+
+def test_custom_parts_picker_and_hiding_preserve_values_and_links():
+    app()
+    document = fields.add_parameter(None, "rear", "Test cage", kind="part", category="Cage")
+    fields.apply(document)
+    key = document["fields"][0]["key"]
+    assert sf.INVENTORY_FIELD_CATEGORIES[key] == "Cage"
+    builder = SetupBuilderView()
+    reference = {"item_id": "cage", "revision": 3, "name": "Cage"}
+    builder._set_field_text(builder._fields[key], "Cage", reference)
+    builder._add_run()
+    builder._set_field_text(builder._fields[key], "Cage", {**reference, "revision": 4})
+    builder._update_dirty_styles()
+    assert builder._fields[key].property("baselineChanged")
+    runs = builder._serialized_runs()
+    builder.deleteLater()
+    document["fields"][0]["active"] = False
+    fields.apply(document)
+    assert key not in sf.INVENTORY_FIELD_CATEGORIES
+    hidden = SetupBuilderView()
+    setup = Setup(data={key: "Cage", "_inventory_part_revisions": {key: reference}, sf.RUNS_KEY: runs})
+    hidden._setup = setup
+    hidden._populate(setup)
+    assert key not in hidden._fields
+    assert hidden._baseline_run_setup["values"][key] == "Cage"
+    assert hidden._baseline_run_setup["inventory_refs"][key] == reference
+    assert hidden._serialized_runs()[1][sf.RUN_SETUP_KEY]["inventory_refs"][key]["revision"] == 4
+    hidden.deleteLater()
+
+
+def test_settings_dialog_edits_selected_field_and_adds_parts_picker():
+    from qt.views.team_setup_fields_qt import TeamSetupFieldsDialog
+    app()
+    document = fields.add_parameter(None, "front", "Original")
+    key = document["fields"][0]["key"]
+    dialog = TeamSetupFieldsDialog(document)
+    dialog._list.setCurrentRow(0)
+    dialog._label.setText("Updated")
+    dialog._section.setCurrentIndex(dialog._section.findData("rear"))
+    dialog._update.click()
+    assert dialog.document["fields"][0]["key"] == key
+    assert dialog.document["fields"][0]["label"] == "Updated"
+    dialog._label.setText("Rear consumable")
+    dialog._kind.setCurrentIndex(dialog._kind.findData("part"))
+    dialog._category.setCurrentText("General Consumables")
+    dialog._add()
+    assert len(dialog.document["fields"]) == 2
+    assert dialog.document["fields"][1]["category"] == "General Consumables"
+    dialog.deleteLater()
+
+
+def test_invalid_parts_category_cannot_be_saved():
+    with pytest.raises(ValueError, match="existing Parts category"):
+        fields.add_parameter(None, "front", "Invalid part", kind="part", category="Unregistered")
+
+def test_main_window_applies_new_fields_without_discarding_active_edits(monkeypatch):
+    from qt.main_window import MainWindow
+    app()
+    for name in ("_connect", "_refresh_offline_catalogs", "_load_team_naming", "_check_for_updates_on_startup", "_navigate"):
+        monkeypatch.setattr(MainWindow, name, lambda *_args, **_kwargs: None)
+    if hasattr(fields, "cached"):
+        monkeypatch.setattr(fields, "cached", lambda: fields.normalize(None))
+    else:
+        monkeypatch.setattr(fields, "load", lambda: fields.normalize(None))
+    monkeypatch.setattr("database.client.fetch_app_doc", lambda _key: None)
+    window = MainWindow()
+    window._stack.setCurrentWidget(window._settings)
+    document = fields.add_parameter(None, "rear", "New field")
+    assert window._setup_parameters_changed(document)
+    key = document["fields"][0]["key"]
+    assert key in window._setup_builder._fields
+    current = window._setup_builder
+    window._stack.setCurrentWidget(current)
+    next_document = fields.add_parameter(document, "front", "Another field")
+    assert not window._setup_parameters_changed(next_document)
+    assert window._setup_builder is current
+    assert sf.CUSTOM_FIELD_DEFINITIONS == document
+    window._connection_timer.stop()
+    window._stack.setCurrentWidget(window._settings)
+    window.close()
+    window.deleteLater()
