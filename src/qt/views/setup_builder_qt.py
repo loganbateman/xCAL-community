@@ -2149,7 +2149,7 @@ class SetupBuilderView(QWidget):
             self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}))
             self._load_runs(self._runs_from_setup(setup), base_values=setup.data)
         if setup.notes and not only_empty:
-            self._notes.setPlainText(setup.notes)
+            self._notes.setPlainText(otk_baseline.editable_notes(setup))
         self.refresh_maintenance()
 
     def _refresh_after_concurrent_merge(self, setup: Setup):
@@ -2171,7 +2171,7 @@ class SetupBuilderView(QWidget):
         for key, edit in self._fields.items():
             self._set_field_text(edit, values.get(key, ""), revision_refs.get(key))
         self._load_runs(self._runs_from_setup(setup), base_values=setup.data)
-        self._notes.setPlainText(setup.notes or "")
+        self._notes.setPlainText(otk_baseline.editable_notes(setup))
         self._maintenance.set_records((setup.data or {}).get(maintenance.CHECKS_KEY, {}))
         self.refresh_maintenance()
 

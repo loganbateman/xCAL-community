@@ -40,7 +40,7 @@ def test_otk_dry_template_maps_only_documented_values():
     assert draft.data["oil_mix"] == "8 oz per gallon"
     assert draft.data["fuel"] == "110 Race Fuel"
     assert not any(key.endswith("_psi") for key in draft.data)
-    assert "Seat position depends on driver height" in draft.notes
+    assert not draft.notes
 
 
 def test_each_team_gets_draft_until_its_copy_exists():
@@ -50,6 +50,16 @@ def test_each_team_gets_draft_until_its_copy_exists():
     owned = otk_baseline.editable_copy(rows[0])
     owned.id = "team-baseline"
     assert otk_baseline.add_when_team_has_no_copy([owned]) == [owned]
+
+
+def test_legacy_boilerplate_removed_but_team_notes_preserved():
+    owned = otk_baseline.editable_copy()
+    for notes in (otk_baseline._LEGACY_NOTES, otk_baseline._LEGACY_NOTES.replace(
+            "Cage spring preload: 1-2 turns, added as the team's requested starting value.\n\n", "")):
+        owned.notes = notes
+        assert otk_baseline.editable_notes(owned) == ""
+    owned.notes = "Our team's baseline notes"
+    assert otk_baseline.editable_notes(owned) == owned.notes
 
 
 def test_new_preload_default_preserves_existing_team_values():
@@ -108,7 +118,7 @@ def test_otk_draft_is_visible_and_editable_in_setup_builder(monkeypatch):
     assert not builder._track.isEnabled()
     builder._set_field_text(builder._fields["toe"], "2 mm toe-out")
     assert builder._field_text(builder._fields["toe"]) == "2 mm toe-out"
-    assert "no rear torsion bar" in builder._notes.toPlainText()
+    assert not builder._notes.toPlainText()
     builder._is_baseline = False
     builder._update_run_navigation()
     assert not builder._run_toolbar.isHidden()

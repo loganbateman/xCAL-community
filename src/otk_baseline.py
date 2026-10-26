@@ -39,7 +39,7 @@ _DATA = {
     "fuel": "110 Race Fuel",
 }
 
-_NOTES = """OTK dry-condition starting point from the OTK Chassis Set-Up Guide.
+_LEGACY_NOTES = """OTK dry-condition starting point from the OTK Chassis Set-Up Guide.
 
 Cage spring preload: 1-2 turns, added as the team's requested starting value.
 
@@ -55,7 +55,7 @@ def template() -> Setup:
         name="OTK Tony Kart Dry Baseline (Guide Draft)",
         is_baseline=True,
         data=deepcopy(_DATA),
-        notes=_NOTES,
+        notes=None,
     )
 
 
@@ -70,6 +70,17 @@ def editable_copy(source: Setup | None = None) -> Setup:
 
 def is_builtin(setup) -> bool:
     return isinstance(setup, Setup) and setup.id == BUILTIN_ID
+
+
+def editable_notes(setup: Setup) -> str:
+    """Drop only untouched shipped boilerplate; keep team-written notes."""
+    notes = setup.notes or ""
+    legacy_without_preload = _LEGACY_NOTES.replace(
+        "Cage spring preload: 1-2 turns, added as the team's requested starting value.\n\n", "")
+    if (setup.is_baseline and (setup.data or {}).get("_template_id") == TEMPLATE_ID
+            and notes.strip() in (_LEGACY_NOTES, legacy_without_preload)):
+        return ""
+    return notes
 
 
 def is_universal(setup) -> bool:
