@@ -41,6 +41,9 @@ def test_video_catalog_remembers_cloud_files_without_downloading(tmp_path, monke
 def test_offline_package_keeps_setups_parts_and_queued_files(
         tmp_path, monkeypatch):
     _isolated_store(tmp_path, monkeypatch)
+    # This test covers the isolated offline queue, not a device's catalog queue.
+    from unittest.mock import Mock
+    monkeypatch.setattr(db, "get_client", Mock(return_value=Mock(queue_items=lambda: [])))
     setup = Setup(
         id="setup-1", drive_folder_id="session-1", name="Race setup",
         driver_name="Alex", chassis_name="2022 RedSpeed",
