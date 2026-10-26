@@ -79,7 +79,7 @@ def workspace_dir(folder_id):
 reload_environment()
 
 APP_TITLE = "xCAL Community"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 UPDATE_CHANNEL = "beta"
 APP_GEOMETRY = "1280x800"
 APP_MIN_SIZE = (1100, 700)

@@ -77,8 +77,42 @@ def test_preview_follows_sections_and_new_fields_appear_immediately():
     application.processEvents()
 
 
-def test_sheet_preview_can_hide_and_restore_selected_parameter(monkeypatch):
+def test_sheet_preview_deletes_parameter_and_saved_order(monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    application = QApplication.instance() or QApplication([])
+    document, section, _attribute = custom_document()
+    key = document["fields"][0]["key"]
+    document["field_order"] = {section: [key]}
+    dialog = TeamSetupFieldsDialog(document)
+    dialog._section.setCurrentIndex(dialog._section.findData(section))
+    key = document["fields"][0]["key"]
+    dialog._preview_cells[key].click()
+    dialog._remove.click()
+    assert dialog.document["fields"] == []
+    assert key not in dialog._preview_cells
+    assert key not in dialog.document["field_order"][section]
+    assert not dialog._remove.isEnabled()
+    reopened = TeamSetupFieldsDialog(fields.normalize(dialog.document))
+    reopened._section.setCurrentIndex(reopened._section.findData(section))
+    assert key not in reopened._preview_cells
+    reopened.deleteLater()
+    dialog.deleteLater()
+    application.processEvents()
+
+
+def test_removed_legacy_fields_have_no_restore_buttons():
+    application = QApplication.instance() or QApplication([])
+    document, section, _attribute = custom_document()
+    document["fields"][0]["active"] = False
+    dialog = TeamSetupFieldsDialog(document)
+    dialog._section.setCurrentIndex(dialog._section.findData(section))
+    assert not dialog._preview_cells
+    dialog.deleteLater()
+    application.processEvents()
+
+
+def test_cancel_field_deletion_keeps_parameter(monkeypatch):
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.No)
     application = QApplication.instance() or QApplication([])
     document, section, _attribute = custom_document()
     dialog = TeamSetupFieldsDialog(document)
@@ -86,10 +120,7 @@ def test_sheet_preview_can_hide_and_restore_selected_parameter(monkeypatch):
     key = document["fields"][0]["key"]
     dialog._preview_cells[key].click()
     dialog._remove.click()
-    assert not dialog.document["fields"][0]["active"]
-    assert dialog._remove.text() == "Restore"
-    dialog._remove.click()
-    assert dialog.document["fields"][0]["active"]
+    assert dialog.document == document
     assert key in dialog._preview_cells
     dialog.deleteLater()
     application.processEvents()

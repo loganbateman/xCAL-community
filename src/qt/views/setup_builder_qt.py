@@ -1620,6 +1620,8 @@ class SetupBuilderView(QWidget):
         self._update_run_highlights()
 
     def _show_run_log(self):
+        if self._is_baseline:
+            return
         # ensureWidgetVisible only nudges a target onto the bottom edge.
         # Center the actual notes editor in the available viewport instead.
         self._scroll.widget().layout().activate()
@@ -1629,6 +1631,10 @@ class SetupBuilderView(QWidget):
             center - self._scroll.viewport().height() // 2)
 
     def _update_run_navigation(self):
+        self._run_toolbar.setVisible(not self._is_baseline)
+        self._run_log_card.setVisible(not self._is_baseline)
+        if hasattr(self, "_maintenance"):
+            self._maintenance.setVisible(not self._is_baseline)
         total = max(1, len(self._runs))
         position = f"Run {self._run_index + 1} of {total}"
         if self._run_index == 0:
@@ -2174,6 +2180,9 @@ class SetupBuilderView(QWidget):
     def refresh_maintenance(self, *_args, reload_context=False):
         if not hasattr(self, "_maintenance"):
             return
+        if self._is_baseline:
+            self._maintenance.hide()
+            return
         if self._maintenance_context is None or reload_context:
             sessions, _age = cache.load_sessions()
             self._maintenance_context = (maintenance_store.cached_snapshot().policy,
@@ -2619,13 +2628,17 @@ class SetupBuilderView(QWidget):
         if identity_refs:
             data["_identity_part_revisions"] = identity_refs
         runs = self._serialized_runs()
-        if runs:
+        if runs and not self._is_baseline:
             data[sf.RUNS_KEY] = runs
         setup.data = data
         checks = self._maintenance.records()
-        if checks:
+        if checks and not self._is_baseline:
             setup.data[maintenance.SCOPE_KEY] = self._maintenance_scope_id
             setup.data[maintenance.CHECKS_KEY] = checks
+        if self._is_baseline:
+            for key in (sf.RUNS_KEY, maintenance.SCOPE_KEY, maintenance.CHECKS_KEY,
+                        "driver_feedback", *(field.key for field in sf.RUN_FIELDS)):
+                setup.data.pop(key, None)
         setup.notes = self._notes.toPlainText().strip() or None
         setup.driver_id = driver.id if driver else None
         setup.driver_name = (

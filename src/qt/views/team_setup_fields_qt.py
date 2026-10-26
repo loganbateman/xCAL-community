@@ -1,4 +1,4 @@
-"""Add/hide team-specific setup parameters without changing original fields."""
+"""Edit team-specific setup parameters without changing original field keys."""
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QComboBox, QLineEdit, QPushButton, QMessageBox,
@@ -49,7 +49,7 @@ class TeamSetupFieldsDialog(QDialog):
         self._remove.setAccessibleName("Remove selected field")
         self._remove.setToolTip("Select a custom field to remove it")
         self._remove.setEnabled(False)
-        self._remove.clicked.connect(self._toggle_visibility)
+        self._remove.clicked.connect(self._delete_field)
         editor_bar.addWidget(self._remove)
         root.addLayout(editor_bar)
         form = QFormLayout()
@@ -216,14 +216,12 @@ class TeamSetupFieldsDialog(QDialog):
             cell.addWidget(control)
             grid.add_cell(cell)
 
-        hidden_fields = []
         visible = [(sf.display_field(field, self.document), sf.BUILTIN_INVENTORY_FIELD_CATEGORIES.get(field.key))
                    for field in builtins]
         for item in self.document["fields"]:
             if item["section"] != section:
                 continue
             if not item["active"]:
-                hidden_fields.append(item)
                 continue
             visible.append((sf.Field(item["key"], item["label"], item["unit"], item["kind"]), item.get("category")))
         categories = {field.key: category for field, category in visible}
@@ -234,15 +232,6 @@ class TeamSetupFieldsDialog(QDialog):
             empty = QLabel("Add a parameter below to build this section.")
             empty.setObjectName("Muted")
             layout.addWidget(empty)
-        if hidden_fields:
-            hidden_label = QLabel("Removed fields · click to restore")
-            hidden_label.setObjectName("Muted")
-            layout.addWidget(hidden_label)
-            for item in hidden_fields:
-                button = QPushButton(item["label"])
-                button.clicked.connect(lambda _checked=False, key=item["key"]: self._select_key(key))
-                self._preview_cells[item["key"]] = button
-                layout.addWidget(button, 0, Qt.AlignLeft)
         layout.addStretch(1)
         previous = self._preview.takeWidget()
         self._preview.setWidget(card)
@@ -297,9 +286,8 @@ class TeamSetupFieldsDialog(QDialog):
         else:
             field = next(item for item in self.document["fields"] if item["key"] == key)
             self._remove.setEnabled(True)
-            self._remove.setToolTip("Remove selected field" if field["active"] else "Restore selected field")
-        self._editor_title.setText("Edit field" if builtin or field.get("active", True) else "Removed field")
-        self._remove.setText("Restore" if not builtin and not field["active"] else "")
+            self._remove.setToolTip("Delete selected field")
+        self._editor_title.setText("Edit field")
         self._label.setEnabled(True)
         self._unit.setEnabled(True)
         for control in (self._kind, self._category, self._new_type):
@@ -316,7 +304,7 @@ class TeamSetupFieldsDialog(QDialog):
             self._category.setCurrentText(field["category"])
         self._loading_editor = False
 
-    def _toggle_visibility(self):
+    def _delete_field(self):
         key = self._selected_key
         if not key:
             return
@@ -324,18 +312,20 @@ class TeamSetupFieldsDialog(QDialog):
             return
         candidate = fields.normalize(self.document)
         field = next(item for item in candidate["fields"] if item["key"] == key)
-        if field["active"] and QMessageBox.question(
-                self, "Remove field", f"Remove {field['label']} from the setup sheet?\n\n"
-                "Saved run values are kept. You can restore this field later.") != QMessageBox.Yes:
+        if QMessageBox.question(
+                self, "Delete field", f"Delete {field['label']} from the team's setup fields?\n\n"
+                "After saving changes, this field cannot be restored here.") != QMessageBox.Yes:
             return
-        field["active"] = not field["active"]
+        candidate["fields"] = [item for item in candidate["fields"] if item["key"] != key]
+        for order in candidate.get("field_order", {}).values():
+            if key in order:
+                order.remove(key)
         try:
             self.document = fields.normalize(candidate)
         except ValueError as exc:
             QMessageBox.warning(self, "Parameter", str(exc))
             return
         self._render()
-        self._select_key(key)
 
     def _save_parameters(self):
         if not self._commit_editor():

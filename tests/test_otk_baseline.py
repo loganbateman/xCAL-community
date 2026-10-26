@@ -3,6 +3,8 @@ from unittest.mock import Mock
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 import otk_baseline
+import maintenance
+import setup_fields as sf
 from qt.views.parts_qt import PartsView, _BaselineCard
 from qt.views.setup_builder_qt import SetupBuilderView
 
@@ -94,6 +96,9 @@ def test_otk_draft_is_visible_and_editable_in_setup_builder(monkeypatch):
     builder._setup = draft
     builder._is_baseline = True
     builder._populate(draft)
+    assert builder._run_toolbar.isHidden()
+    assert builder._run_log_card.isHidden()
+    assert builder._maintenance.isHidden()
     builder._universal_baseline = True
     builder._set_identity_controls_enabled(True)
     assert builder._field_text(builder._fields["toe"]) == "half box toe-out (1mm)"
@@ -104,6 +109,11 @@ def test_otk_draft_is_visible_and_editable_in_setup_builder(monkeypatch):
     builder._set_field_text(builder._fields["toe"], "2 mm toe-out")
     assert builder._field_text(builder._fields["toe"]) == "2 mm toe-out"
     assert "no rear torsion bar" in builder._notes.toPlainText()
+    builder._is_baseline = False
+    builder._update_run_navigation()
+    assert not builder._run_toolbar.isHidden()
+    assert not builder._run_log_card.isHidden()
+    assert not builder._maintenance.isHidden()
     builder.deleteLater()
     app.processEvents()
 
@@ -133,6 +143,10 @@ def test_universal_otk_draft_saves_without_identity_scope(monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", information)
     builder = SetupBuilderView()
     draft = otk_baseline.editable_copy()
+    draft.data[maintenance.CHECKS_KEY] = {"old-check": {"checked": True}}
+    draft.data[maintenance.SCOPE_KEY] = "old-scope"
+    draft.data["driver_feedback"] = "old feedback"
+    draft.data["run_number"] = "3"
     builder._setup = draft
     builder._is_baseline = True
     builder._universal_baseline = True
@@ -143,6 +157,11 @@ def test_universal_otk_draft_saves_without_identity_scope(monkeypatch):
     assert saved[0].chassis_id is None
     assert saved[0].track is None
     assert saved[0].data["_universal_baseline"] is True
+    assert sf.RUNS_KEY not in saved[0].data
+    assert maintenance.CHECKS_KEY not in saved[0].data
+    assert maintenance.SCOPE_KEY not in saved[0].data
+    assert "driver_feedback" not in saved[0].data
+    assert "run_number" not in saved[0].data
     information.assert_not_called()
     builder.deleteLater()
     app.processEvents()
